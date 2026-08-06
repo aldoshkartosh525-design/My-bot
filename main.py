@@ -1,18 +1,33 @@
 import os
 import asyncio
 import time
-import urllib.parse
 import aiohttp
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
+# Получаем переменные из настроек Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 8070071877
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 user_cooldowns = {}
+
+# Веб-сервер для Render (обязательно для запуска)
+async def handle_ping(request):
+    return web.Response(text="Bot is active!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
@@ -40,13 +55,10 @@ async def bind_handler(message: types.Message):
     user_id = message.from_user.id
     current_time = time.time()
     
-    # Проверка кулдауна (15 секунд)
     if user_id in user_cooldowns:
         elapsed = current_time - user_cooldowns[user_id]
         if elapsed < 15:
             remaining = int(15 - elapsed)
-            
-            # Отправка нового сообщения и его удаление для каждой секунды
             for sec in range(remaining, 0, -1):
                 try:
                     timer_msg = await message.answer(f"До следующей попытки {sec} секунд")
@@ -91,17 +103,21 @@ async def ai_handler(message: types.Message):
 
     thinking_msg = await message.answer("Phoenix AI думает...")
 
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{"parts": [{"text": question}]}]
+    }
+
     try:
-        encoded_question = urllib.parse.quote(question)
-        url = f"https://text.pollinations.ai/{encoded_question}?model=openai"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
+        timeout = aiohttp.ClientTimeout(total=25)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload) as resp:
                 if resp.status == 200:
-                    ai_answer = await resp.text()
+                    data = await resp.json()
+                    ai_answer = data["candidates"][0]["content"]["parts"][0]["text"]
                     reply = f"Phoenix AI:\n\n{ai_answer}"
                 else:
-                    reply = "Phoenix AI: Не удалось получить ответ, попробуйте позже."
+                    reply = f"Phoenix AI: Ошибка API (код {resp.status}). Проверьте ключ."
         
         try:
             await thinking_msg.delete()
@@ -114,11 +130,13 @@ async def ai_handler(message: types.Message):
             await thinking_msg.delete()
         except Exception:
             pass
-        await message.answer("Phoenix AI: Произошла ошибка при обработке запроса.")
+        await message.answer(f"Phoenix AI: Ошибка при обработке: {str(e)[:50]}")
 
 async def main():
+    await start_web_server()
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+
