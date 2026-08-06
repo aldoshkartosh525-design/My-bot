@@ -11,7 +11,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 8070071877
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=8814675882:AAFAhtmVUN5SnOh1r-ql-IO-fh7C1j4tR5s)
 dp = Dispatcher()
 
 user_cooldowns = {}
