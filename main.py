@@ -1,41 +1,39 @@
-import asyncio
 import os
-import re
+import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
-API_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = 8070071877  # Твой ID
 
-bot = Bot(token=API_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-BIND_REGEX = re.compile(r'^/bind\s+([a-zA-Z0-9_]+)\s+(\S+)$')
-
 @dp.message(Command("start"))
-async def start_cmd(message: types.Message):
-    await message.answer(
-        "[Бот] Для того, чтобы привязать игровой аккаунт, выполните следующие действия:\n"
-        "1. Напишите (сюда): /bind [Ваш-Ник] [Ваш-Пароль]\n"
-        "(Поддержка Ваш пароль не увидит)\n"
-        "2. Напишите /help (сюда), чтобы увидеть возможности.\n"
-        "Приятной игры на наших серверах!"
+async def start_handler(message: types.Message):
+    # Ответ пользователю
+    await message.answer("Привет! Твое сообщение доставлено.")
+    
+    # Уведомление лично тебе в ЛС
+    user_info = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+    await bot.send_message(
+        chat_id=ADMIN_ID, 
+        text=f"🔔 Пользователь {user_info} (ID: {message.from_user.id}) нажал /start!"
     )
 
-@dp.message(Command("help"))
-async def help_cmd(message: types.Message):
-    await message.answer("Список команд:\n/bind [Ник] [Пароль] — Привязать аккаунт\n/help — Справка")
-
-@dp.message(Command("bind"))
-async def bind_cmd(message: types.Message):
-    match = BIND_REGEX.match(message.text.strip())
-    if match:
-        await message.answer("[Бот] Аккаунт был успешно привязан!")
-    else:
-        await message.answer("[Бот] Неверный формат! Используйте: /bind [Ник] [Пароль]")
+# Пересылка любого другого текста тебе в ЛС
+@dp.message()
+async def forward_to_admin(message: types.Message):
+    await message.answer("Сообщение отправлено админу!")
+    user_info = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+    await bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"📩 Новое сообщение от {user_info}:\n\n{message.text}"
+    )
 
 async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-  
+    
