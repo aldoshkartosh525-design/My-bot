@@ -366,17 +366,15 @@ async def servers_handler(message: types.Message):
   if not is_admin(message.from_user.id):
     return
 
-  cpu_usage = psutil.cpu_percent(interval=0.5)
-  memory_info = psutil.virtual_memory()
-
-  ram_used_mb = round(memory_info.used / (1024 * 1024), 1)
-  ram_total_mb = round(memory_info.total / (1024 * 1024), 1)
-  ram_percent = memory_info.percent
+  process = psutil.Process(os.getpid())
+  cpu_usage = process.cpu_percent(interval=0.5)
+  mem_info = process.memory_info().rss
+  ram_used_mb = round(mem_info / (1024 * 1024), 1)
 
   stats_text = (
-      "[Статус Сервера]\n\n"
+      "[Статус Бот-Процесса]\n\n"
       f"Загрузка ЦП (CPU): {cpu_usage}%\n"
-      f"Использование ОЗУ (RAM): {ram_used_mb} MB / {ram_total_mb} MB ({ram_percent}%)\n"
+      f"Использование ОЗУ (RAM): {ram_used_mb} MB\n"
       "Статус веб-сервера: Активен (24/7)\n"
       "Статус Telegram API: Подключено"
   )
@@ -603,4 +601,4 @@ async def main():
 
 if __name__ == "__main__":
   asyncio.run(main())
-  
+    
