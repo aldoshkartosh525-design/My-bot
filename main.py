@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import urllib.parse
+import psutil
 
 import aiohttp
 from aiogram import BaseMiddleware, Bot, Dispatcher, types
@@ -327,6 +328,62 @@ async def op_handler(message: types.Message):
     )
 
 
+@dp.message(Command("deop"))
+async def deop_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+  args = message.text.split()
+  if len(args) < 2:
+    await bot.send_message(
+        message.chat.id, "[Система] Укажите ID. Пример: /deop 123456789"
+    )
+    return
+
+  target_id = int(args[1])
+
+  if target_id == MAIN_ADMIN_ID:
+    await bot.send_message(
+        message.chat.id,
+        "[Система] Ошибка. Нельзя забрать админку у Главного Администратора.",
+    )
+    return
+
+  if target_id in db["admins"]:
+    db["admins"].remove(target_id)
+    save_data()
+    await bot.send_message(
+        message.chat.id,
+        f"[Система] У пользователя {target_id} забраны админ права.",
+    )
+  else:
+    await bot.send_message(
+        message.chat.id, "[Система] Пользователь не является админом."
+    )
+
+
+@dp.message(Command("servers", "server"))
+async def servers_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+
+  cpu_usage = psutil.cpu_percent(interval=0.5)
+  memory_info = psutil.virtual_memory()
+
+  ram_used_mb = round(memory_info.used / (1024 * 1024), 1)
+  ram_total_mb = round(memory_info.total / (1024 * 1024), 1)
+  ram_percent = memory_info.percent
+
+  stats_text = (
+      "[Статус Сервера]\n\n"
+      f"Загрузка ЦП (CPU): {cpu_usage}%\n"
+      f"Использование ОЗУ (RAM): {ram_used_mb} MB / {ram_total_mb} MB ({ram_percent}%)\n"
+      "Статус веб-сервера: Активен (24/7)\n"
+      "Статус Telegram API: Подключено"
+  )
+
+  await bot.send_message(message.chat.id, stats_text)
+
+
 @dp.message(Command("ban"))
 async def ban_handler(message: types.Message):
   if not is_admin(message.from_user.id):
@@ -387,7 +444,6 @@ async def spam_handler(message: types.Message):
   if not is_admin(message.from_user.id):
     return
 
-  # Шаблон: /spam ID (.Текст.) Кол-во
   pattern = r"/spam\s+(\d+)\s+\(\.(.*?)\.\)\s+(\d+)"
   match = re.search(pattern, message.text, re.DOTALL)
 
@@ -415,7 +471,7 @@ async def spam_handler(message: types.Message):
     try:
       await bot.send_message(target_id, spam_text)
       sent_count += 1
-      await asyncio.sleep(0.1)  # Защита от моментальной блокировки бота Telegram
+      await asyncio.sleep(0.1)
 
       if i % 25 == 0 or i == count:
         try:
@@ -547,4 +603,4 @@ async def main():
 
 if __name__ == "__main__":
   asyncio.run(main())
-
+  
