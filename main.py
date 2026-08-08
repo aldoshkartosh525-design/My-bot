@@ -10,6 +10,7 @@ import psutil
 from aiogram import BaseMiddleware, Bot, Dispatcher, types
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
+from pymongo import MongoClient
 
 # ==========================================
 # ВЕБ-СЕРВЕР ДЛЯ RENDER И UPTIMEROBOT
@@ -34,33 +35,42 @@ def run_health_check_server():
 threading.Thread(target=run_health_check_server, daemon=True).start()
 
 # ==========================================
-# ОСНОВНЫЕ НАСТРОЙКИ И СОХРАНЕНИЕ ДАННЫХ
+# ОСНОВНЫЕ НАСТРОЙКИ И СОХРАНЕНИЕ В MONGODB
 # ==========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MAIN_ADMIN_ID = 8070071877  # Главный админ
+MONGO_URI = os.getenv("MONGO_URI")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-DATA_FILE = "bot_data.json"
+# Подключение к MongoDB Atlas
+client = MongoClient(MONGO_URI)
+db_collection = client.bot_database.bot_data
 
 
 def load_data():
-  if os.path.exists(DATA_FILE):
-    try:
-      with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-    except Exception:
-      pass
-  return {"admins": [MAIN_ADMIN_ID], "banned_users": {}, "accounts_db": {}}
+  data = db_collection.find_one({"_id": "bot_storage"})
+  if data:
+    data.pop("_id", None)
+    return data
+
+  default_db = {
+      "admins": [MAIN_ADMIN_ID],
+      "banned_users": {},
+      "accounts_db": {},
+  }
+  db_collection.insert_one({"_id": "bot_storage", **default_db})
+  return default_db
 
 
 def save_data():
   try:
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-      json.dump(db, f, ensure_ascii=False, indent=2)
-  except Exception:
-    pass
+    save_obj = db.copy()
+    save_obj["_id"] = "bot_storage"
+    db_collection.replace_one({"_id": "bot_storage"}, save_obj, upsert=True)
+  except Exception as e:
+    print(f"Ошибка сохранения в БД: {e}")
 
 
 db = load_data()
@@ -280,7 +290,6 @@ async def report_handler(message: types.Message):
 async def antispam_handler(message: types.Message):
   user_id = message.from_user.id
 
-  # Полный игнор обычного пользователя
   if not is_admin(user_id):
     return
 
@@ -395,7 +404,6 @@ async def spam_handler(message: types.Message):
   spam_text = match.group(2)
   count = min(int(match.group(3)), 999)
 
-  # Запрет спамить Главному Админу
   if target_id == MAIN_ADMIN_ID:
     await bot.send_message(
         message.chat.id,
@@ -629,5 +637,4 @@ async def main():
 
 if __name__ == "__main__":
   asyncio.run(main())
-
-
+  
