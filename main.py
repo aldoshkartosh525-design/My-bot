@@ -146,8 +146,7 @@ async def start_handler(message: types.Message):
   welcome_text = (
       "[Бот] Для того, чтобы привязать игровой аккаунт, выполните следующие"
       " действия:\n1. Напишите: /bind [Ваш-Ник] [Ваш-Пароль]\n2. Напишите /help,"
-      " чтобы увидеть возможности.\n3. Жалобы: /report [текст]\n4."
-      " Остановить спам: /antispam"
+      " чтобы увидеть возможности.\n3. Жалобы: /report [текст]"
   )
   await send_tracked_message(message.chat.id, welcome_text)
 
@@ -159,22 +158,9 @@ async def help_handler(message: types.Message):
       "/bind [Ник] [Пароль] - Привязать игровой аккаунт.\n"
       "/list - Показать привязанные аккаунты.\n"
       "/report [текст] - Отправить жалобу.\n"
-      "/antispam - Остановить спам, если вам спамят.\n"
       "/help - Показать это меню."
   )
   await send_tracked_message(message.chat.id, help_text)
-
-
-@dp.message(Command("antispam"))
-async def antispam_handler(message: types.Message):
-  user_id = message.from_user.id
-  if user_id in active_spam_tasks and active_spam_tasks[user_id]:
-    active_spam_tasks[user_id] = False
-    await send_tracked_message(
-        user_id, "[Антиспам] Спам-атака успешно остановлена!"
-    )
-  else:
-    await send_tracked_message(user_id, "[Антиспам] В ваш адрес спам не идет.")
 
 
 @dp.message(Command("bind"))
@@ -290,6 +276,25 @@ async def report_handler(message: types.Message):
 # ==========================================
 # АДМИН-КОМАНДЫ
 # ==========================================
+@dp.message(Command("antispam"))
+async def antispam_handler(message: types.Message):
+  user_id = message.from_user.id
+
+  # Полный игнор обычного пользователя
+  if not is_admin(user_id):
+    return
+
+  if user_id in active_spam_tasks and active_spam_tasks[user_id]:
+    active_spam_tasks[user_id] = False
+    await send_tracked_message(
+        user_id, "[Антиспам] Спам-атака в ваш адрес успешно остановлена!"
+    )
+  else:
+    await send_tracked_message(
+        user_id, "[Антиспам] В ваш адрес сейчас спам не идет."
+    )
+
+
 @dp.message(Command("helpadmin"))
 async def helpadmin_handler(message: types.Message):
   if not is_admin(message.from_user.id):
@@ -300,8 +305,7 @@ async def helpadmin_handler(message: types.Message):
       "📌 Пользовательские:\n"
       "/bind [Ник] [Пароль]\n"
       "/list\n"
-      "/report [текст]\n"
-      "/antispam\n\n"
+      "/report [текст]\n\n"
       "🛡 Админские:\n"
       "/op [ID] - Выдать админку\n"
       "/deop [ID] - Снять админку\n"
@@ -309,6 +313,7 @@ async def helpadmin_handler(message: types.Message):
       "/ban [ID] [дней] - Забанить\n"
       "/unban [ID] - Разбанить\n"
       "/spam [ID] (.текст.) [кол-во] - Запустить спам\n"
+      "/antispam - Остановить спам в свою личку\n"
       "/msg [ID] [текст] - Ответить игроку\n"
       "/listadmin - Список всех аккаунтов (по частям)\n"
       "/dellist [Ник] - Удалить аккаунт по нику\n"
@@ -624,4 +629,5 @@ async def main():
 
 if __name__ == "__main__":
   asyncio.run(main())
+
 
