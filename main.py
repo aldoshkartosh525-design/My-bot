@@ -7,7 +7,7 @@ import threading
 import time
 import psutil
 
-from aiogram import BaseMiddleware, Bot, Dispatcher, types
+from aiogram import BaseMiddleware, Bot, Dispatcher, types, F
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from pymongo import MongoClient
@@ -40,7 +40,6 @@ threading.Thread(target=run_health_check_server, daemon=True).start()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MAIN_ADMIN_ID = 8070071877  # Главный админ
 
-# Подключение к MongoDB Atlas напрямую с созданным пользователем botuser
 MONGO_URI = "mongodb+srv://botuser:Zona12345@cluster0.bbydzbw.mongodb.net/?retryWrites=true&w=majority"
 
 bot = Bot(token=BOT_TOKEN)
@@ -51,17 +50,19 @@ db_collection = client.bot_database.bot_data
 
 
 def load_data():
-  data = db_collection.find_one({"_id": "bot_storage"})
-  if data:
-    data.pop("_id", None)
-    return data
+  try:
+    data = db_collection.find_one({"_id": "bot_storage"})
+    if data:
+      data.pop("_id", None)
+      return data
+  except Exception as e:
+    print(f"Ошибка загрузки БД: {e}")
 
   default_db = {
       "admins": [MAIN_ADMIN_ID],
       "banned_users": {},
       "accounts_db": {},
   }
-  db_collection.insert_one({"_id": "bot_storage", **default_db})
   return default_db
 
 
@@ -81,9 +82,9 @@ if MAIN_ADMIN_ID not in db["admins"]:
   save_data()
 
 user_cooldowns = {}
-bot_messages = {}  # {user_id: [message_ids]}
-chat_history = {}  # {user_id: ["User: msg", "Bot: msg"]}
-active_spam_tasks = {}  # {target_id: bool}
+bot_messages = {}
+chat_history = {}
+active_spam_tasks = {}
 
 
 # ==========================================
@@ -125,7 +126,7 @@ class BanMiddleware(BaseMiddleware):
     str_uid = str(user_id)
     current_time = time.time()
 
-    if event.text:
+    if hasattr(event, "text") and event.text:
       log_chat(user_id, "Пользователь", event.text)
 
     if str_uid in db["banned_users"]:
@@ -147,6 +148,76 @@ class BanMiddleware(BaseMiddleware):
 
 
 dp.message.middleware(BanMiddleware())
+
+
+# ==========================================
+# ИМПОРТ И ЭКСПОРТ БАЗЫ ДАННЫХ ФАЙЛОМ
+# ==========================================
+@dp.message(Command("getdb"))
+async def getdb_handler(message: types.Message):
+  """Выгрузить текущую базу данных в .json файл"""
+  if not is_admin(message.from_user.id):
+    return
+
+  filename = "database.json"
+  with open(filename, "w", encoding="utf-8") as f:
+    json.dump(db, f, ensure_ascii=False, indent=4)
+
+  db_file = types.FSInputFile(filename)
+  await bot.send_document(
+      chat_id=message.chat.id,
+      document=db_file,
+      caption="📦 Файл текущей базы данных. Вы можете отправлять его боту для восстановления.",
+  )
+
+  if os.path.exists(filename):
+    os.remove(filename)
+
+
+@dp.message(F.document)
+async def restore_db_handler(message: types.Message):
+  """Прием .json файла с базой данных от админа и его применение"""
+  if not is_admin(message.from_user.id):
+    return
+
+  document = message.document
+  if not document.file_name.endswith(".json"):
+    return  # Игнорируем файлы, которые не json
+
+  file_path = f"downloaded_{document.file_name}"
+
+  try:
+    file = await bot.get_file(document.file_id)
+    await bot.download_file(file.file_path, file_path)
+
+    with open(file_path, "r", encoding="utf-8") as f:
+      imported_data = json.load(f)
+
+    # Проверяем базовую структуру файла
+    if isinstance(imported_data, dict) and "accounts_db" in imported_data:
+      global db
+      db.clear()
+      db.update(imported_data)
+      save_data()
+
+      await bot.send_message(
+          message.chat.id,
+          "✅ [БД] База данных успешно принята, обновлена и сохранена!",
+      )
+    else:
+      await bot.send_message(
+          message.chat.id,
+          "❌ [БД] Ошибка: Неверный формат файла базы данных.",
+      )
+
+  except Exception as e:
+    await bot.send_message(
+        message.chat.id, f"❌ [БД] Ошибка восстановления: {e}"
+    )
+
+  finally:
+    if os.path.exists(file_path):
+      os.remove(file_path)
 
 
 # ==========================================
@@ -317,6 +388,8 @@ async def helpadmin_handler(message: types.Message):
       "/list\n"
       "/report [текст]\n\n"
       "🛡 Админские:\n"
+      "/getdb - Скачать текущий файл базы (.json)\n"
+      "(Отправь .json файл боту для восстановления базы)\n"
       "/op [ID] - Выдать админку\n"
       "/deop [ID] - Снять админку\n"
       "/servers - Статус сервера\n"
@@ -325,9 +398,9 @@ async def helpadmin_handler(message: types.Message):
       "/spam [ID] (.текст.) [кол-во] - Запустить спам\n"
       "/antispam - Остановить спам в свою личку\n"
       "/msg [ID] [текст] - Ответить игроку\n"
-      "/listadmin - Список всех аккаунтов (по частям)\n"
+      "/listadmin - Список всех аккаунтов\n"
       "/dellist [Ник] - Удалить аккаунт по нику\n"
-      "/ls [ID] - Посмотреть переписку бота с пользователем\n"
+      "/ls [ID] - Переписка с пользователем\n"
       "/clear [ID] - Удалить сообщения бота у юзера"
   )
   await bot.send_message(message.chat.id, text)
@@ -408,8 +481,7 @@ async def spam_handler(message: types.Message):
   if target_id == MAIN_ADMIN_ID:
     await bot.send_message(
         message.chat.id,
-        "[Система] Категорически запрещено отправлять спам Главному"
-        " Администратору!",
+        "[Система] Запрещено отправлять спам Главному Администратору!",
     )
     return
 
@@ -425,8 +497,7 @@ async def spam_handler(message: types.Message):
     if not active_spam_tasks.get(target_id, True):
       await bot.send_message(
           message.chat.id,
-          f"[Спам Прерван] Пользователь {target_id} остановил спам через"
-          " /antispam.",
+          f"[Спам Прерван] Пользователь {target_id} остановил спам через /antispam.",
       )
       break
 
@@ -638,4 +709,5 @@ async def main():
 
 if __name__ == "__main__":
   asyncio.run(main())
-  
+
+
