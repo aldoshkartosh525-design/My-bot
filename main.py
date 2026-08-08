@@ -40,8 +40,8 @@ threading.Thread(target=run_health_check_server, daemon=True).start()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MAIN_ADMIN_ID = 8070071877  # Главный админ
 
-# Подключение к MongoDB Atlas напрямую
-MONGO_URI = "mongodb+srv://botuser:Zona12345@cluster0.bbydzbw.mongodb.net/?appName=Cluster0"
+# Подключение к MongoDB Atlas напрямую с созданным пользователем botuser
+MONGO_URI = "mongodb+srv://botuser:Zona12345@cluster0.bbydzbw.mongodb.net/?retryWrites=true&w=majority"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
