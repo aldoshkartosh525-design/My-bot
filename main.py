@@ -1,15 +1,12 @@
 import asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
-import math
 import os
 import re
 import threading
 import time
-import urllib.parse
 import psutil
 
-import aiohttp
 from aiogram import BaseMiddleware, Bot, Dispatcher, types
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
@@ -40,7 +37,7 @@ threading.Thread(target=run_health_check_server, daemon=True).start()
 # ОСНОВНЫЕ НАСТРОЙКИ И СОХРАНЕНИЕ ДАННЫХ
 # ==========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-MAIN_ADMIN_ID = 8070071877  # Главный админ (незабаниваемый)
+MAIN_ADMIN_ID = 8070071877  # Главный админ
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -73,24 +70,37 @@ if MAIN_ADMIN_ID not in db["admins"]:
   save_data()
 
 user_cooldowns = {}
-bot_messages = {}
+bot_messages = {}  # {user_id: [message_ids]}
+chat_history = {}  # {user_id: ["User: msg", "Bot: msg"]}
+active_spam_tasks = {}  # {target_id: bool}
+
 
 # ==========================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И MIDDLEWARE
 # ==========================================
+def log_chat(user_id: int, sender: str, text: str):
+  if user_id not in chat_history:
+    chat_history[user_id] = []
+  chat_history[user_id].append(f"[{sender}]: {text}")
+  if len(chat_history[user_id]) > 100:
+    chat_history[user_id].pop(0)
+
+
 async def send_tracked_message(chat_id: int, text: str):
   try:
     msg = await bot.send_message(chat_id, text)
     if chat_id not in bot_messages:
       bot_messages[chat_id] = []
     bot_messages[chat_id].append(msg.message_id)
+
+    log_chat(chat_id, "Бот", text)
     return msg
   except Exception:
     return None
 
 
 def is_valid_input(text: str) -> bool:
-  return bool(re.match(r"^[A-Za-z0-9]+$", text))
+  return bool(re.match(r"^[A-Za-z0-9_]+$", text))
 
 
 def is_admin(user_id: int) -> bool:
@@ -104,13 +114,19 @@ class BanMiddleware(BaseMiddleware):
     str_uid = str(user_id)
     current_time = time.time()
 
+    if event.text:
+      log_chat(user_id, "Пользователь", event.text)
+
     if str_uid in db["banned_users"]:
       unban_time = db["banned_users"][str_uid]
       if current_time < unban_time:
-        days_left = math.ceil((unban_time - current_time) / 86400)
-        if days_left < 1:
-          days_left = 1
-        await event.answer(f"[Система] У вас бан {days_left} дней.")
+        seconds_left = int(unban_time - current_time)
+        days_left = seconds_left // 86400
+        minutes_left = (seconds_left % 86400) // 60
+
+        await event.answer(
+            f"[Система] У вас бан {days_left} дней и {minutes_left} минут."
+        )
         return
       else:
         del db["banned_users"][str_uid]
@@ -121,6 +137,7 @@ class BanMiddleware(BaseMiddleware):
 
 dp.message.middleware(BanMiddleware())
 
+
 # ==========================================
 # ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
 # ==========================================
@@ -128,9 +145,9 @@ dp.message.middleware(BanMiddleware())
 async def start_handler(message: types.Message):
   welcome_text = (
       "[Бот] Для того, чтобы привязать игровой аккаунт, выполните следующие"
-      " действия:\n1. Напишите: /bind [Ваш-Ник] [Ваш-Пароль]\n(Поддержка"
-      " Ваш пароль не увидит)\n2. Напишите /help, чтобы увидеть возможности.\n3."
-      " Жалобы /report [текст]\nПриятной игры на наших серверах."
+      " действия:\n1. Напишите: /bind [Ваш-Ник] [Ваш-Пароль]\n2. Напишите /help,"
+      " чтобы увидеть возможности.\n3. Жалобы: /report [текст]\n4."
+      " Остановить спам: /antispam"
   )
   await send_tracked_message(message.chat.id, welcome_text)
 
@@ -138,12 +155,26 @@ async def start_handler(message: types.Message):
 @dp.message(Command("help"))
 async def help_handler(message: types.Message):
   help_text = (
-      "Список доступных команд:\n\n/bind [Ник] [Пароль] - Привязать игровой"
-      " аккаунт к Telegram.\n/list - Показать привязанные аккаунты.\n/report"
-      " [текст] - Отправить жалобу/вопрос администрации.\n/ai [ваш вопрос] -"
-      " Задать вопрос нейросети Phoenix AI.\n/help - Показать это меню."
+      "Список доступных команд:\n\n"
+      "/bind [Ник] [Пароль] - Привязать игровой аккаунт.\n"
+      "/list - Показать привязанные аккаунты.\n"
+      "/report [текст] - Отправить жалобу.\n"
+      "/antispam - Остановить спам, если вам спамят.\n"
+      "/help - Показать это меню."
   )
   await send_tracked_message(message.chat.id, help_text)
+
+
+@dp.message(Command("antispam"))
+async def antispam_handler(message: types.Message):
+  user_id = message.from_user.id
+  if user_id in active_spam_tasks and active_spam_tasks[user_id]:
+    active_spam_tasks[user_id] = False
+    await send_tracked_message(
+        user_id, "[Антиспам] Спам-атака успешно остановлена!"
+    )
+  else:
+    await send_tracked_message(user_id, "[Антиспам] В ваш адрес спам не идет.")
 
 
 @dp.message(Command("bind"))
@@ -177,11 +208,16 @@ async def bind_handler(message: types.Message):
   password = args[2]
 
   if not is_valid_input(username) or not is_valid_input(password):
-    await send_tracked_message(user_id, "[Бот] Неверный пароль или ник")
+    await send_tracked_message(user_id, "[Бот] Неверный пароль или ник.")
     return
 
-  user_cooldowns[user_id] = current_time
+  for uid, accs in db["accounts_db"].items():
+    for acc in accs:
+      if acc["nick"].lower() == username.lower():
+        await send_tracked_message(user_id, "[Бот] Этот аккаунт уже привязан.")
+        return
 
+  user_cooldowns[user_id] = current_time
   str_uid = str(user_id)
   if str_uid not in db["accounts_db"]:
     db["accounts_db"][str_uid] = []
@@ -225,9 +261,7 @@ async def report_handler(message: types.Message):
   text = message.text[7:].strip()
   if not text:
     await send_tracked_message(
-        message.chat.id,
-        "[Система] Напишите текст жалобы после команды. Пример: /report Нашел"
-        " баг",
+        message.chat.id, "[Система] Пример: /report Нашел баг"
     )
     return
 
@@ -237,7 +271,6 @@ async def report_handler(message: types.Message):
       if message.from_user.username
       else message.from_user.first_name
   )
-
   report_msg = (
       f"[ЖАЛОБА/РЕПОРТ]\nОт пользователя: {tg_user}\nID: {user_id}\nТекст:"
       f" {text}"
@@ -246,273 +279,72 @@ async def report_handler(message: types.Message):
   try:
     await bot.send_message(MAIN_ADMIN_ID, report_msg)
     await send_tracked_message(
-        message.chat.id,
-        "[Система] Ваша жалоба отправлена главной администрации.",
+        message.chat.id, "[Система] Ваша жалоба отправлена."
     )
   except Exception:
     await send_tracked_message(
-        message.chat.id, "[Система] Ошибка при отправке жалобы."
-    )
-
-
-@dp.message(Command("ai"))
-async def ai_handler(message: types.Message):
-  question = message.text[3:].strip()
-  if not question:
-    await send_tracked_message(
-        message.chat.id,
-        "[Phoenix AI] Напишите вопрос после команды. Пример: /ai Как играть?",
-    )
-    return
-
-  thinking_msg = await send_tracked_message(
-      message.chat.id, "[Phoenix AI] Обработка запроса..."
-  )
-
-  encoded_question = urllib.parse.quote(question)
-  url = f"https://text.pollinations.ai/{encoded_question}"
-
-  try:
-    async with aiohttp.ClientSession() as session:
-      async with session.get(url, timeout=20) as resp:
-        if resp.status == 200:
-          ai_answer = await resp.text()
-          reply = f"[Phoenix AI]\n\n{ai_answer}"
-        else:
-          reply = "[Phoenix AI] Ошибка сервера ИИ. Попробуйте позже."
-
-    try:
-      if thinking_msg:
-        await bot.delete_message(message.chat.id, thinking_msg.message_id)
-    except Exception:
-      pass
-
-    await send_tracked_message(message.chat.id, reply)
-
-  except Exception:
-    try:
-      if thinking_msg:
-        await bot.delete_message(message.chat.id, thinking_msg.message_id)
-    except Exception:
-      pass
-    await send_tracked_message(
-        message.chat.id, "[Phoenix AI] Произошла ошибка сети."
+        message.chat.id, "[Система] Ошибка при отправке."
     )
 
 
 # ==========================================
 # АДМИН-КОМАНДЫ
 # ==========================================
-@dp.message(Command("op"))
-async def op_handler(message: types.Message):
+@dp.message(Command("helpadmin"))
+async def helpadmin_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+
+  text = (
+      "[ПАНЕЛЬ АДМИНИСТРАТОРА]\n\n"
+      "📌 Пользовательские:\n"
+      "/bind [Ник] [Пароль]\n"
+      "/list\n"
+      "/report [текст]\n"
+      "/antispam\n\n"
+      "🛡 Админские:\n"
+      "/op [ID] - Выдать админку\n"
+      "/deop [ID] - Снять админку\n"
+      "/servers - Статус сервера\n"
+      "/ban [ID] [дней] - Забанить\n"
+      "/unban [ID] - Разбанить\n"
+      "/spam [ID] (.текст.) [кол-во] - Запустить спам\n"
+      "/msg [ID] [текст] - Ответить игроку\n"
+      "/listadmin - Список всех аккаунтов (по частям)\n"
+      "/dellist [Ник] - Удалить аккаунт по нику\n"
+      "/ls [ID] - Посмотреть переписку бота с пользователем\n"
+      "/clear [ID] - Удалить сообщения бота у юзера"
+  )
+  await bot.send_message(message.chat.id, text)
+
+
+@dp.message(Command("ls"))
+async def ls_handler(message: types.Message):
   if not is_admin(message.from_user.id):
     return
   args = message.text.split()
   if len(args) < 2:
     await bot.send_message(
-        message.chat.id, "[Система] Укажите ID. Пример: /op 123456789"
+        message.chat.id, "[Система] Используйте: /ls [ID_пользователя]"
     )
     return
 
   target_id = int(args[1])
-  if target_id not in db["admins"]:
-    db["admins"].append(target_id)
-    save_data()
+  if target_id not in chat_history or not chat_history[target_id]:
     await bot.send_message(
-        message.chat.id,
-        f"[Система] Пользователю {target_id} выведены админ права.",
-    )
-  else:
-    await bot.send_message(
-        message.chat.id, "[Система] Пользователь уже является админом."
-    )
-
-
-@dp.message(Command("deop"))
-async def deop_handler(message: types.Message):
-  if not is_admin(message.from_user.id):
-    return
-  args = message.text.split()
-  if len(args) < 2:
-    await bot.send_message(
-        message.chat.id, "[Система] Укажите ID. Пример: /deop 123456789"
+        message.chat.id, f"[Система] История сообщений с {target_id} пуста."
     )
     return
 
-  target_id = int(args[1])
-
-  if target_id == MAIN_ADMIN_ID:
-    await bot.send_message(
-        message.chat.id,
-        "[Система] Ошибка. Нельзя забрать админку у Главного Администратора.",
-    )
-    return
-
-  if target_id in db["admins"]:
-    db["admins"].remove(target_id)
-    save_data()
-    await bot.send_message(
-        message.chat.id,
-        f"[Система] У пользователя {target_id} забраны админ права.",
-    )
-  else:
-    await bot.send_message(
-        message.chat.id, "[Система] Пользователь не является админом."
-    )
-
-
-@dp.message(Command("servers", "server"))
-async def servers_handler(message: types.Message):
-  if not is_admin(message.from_user.id):
-    return
-
-  process = psutil.Process(os.getpid())
-  cpu_usage = process.cpu_percent(interval=0.5)
-  mem_info = process.memory_info().rss
-  ram_used_mb = round(mem_info / (1024 * 1024), 1)
-
-  stats_text = (
-      "[Статус Бот-Процесса]\n\n"
-      f"Загрузка ЦП (CPU): {cpu_usage}%\n"
-      f"Использование ОЗУ (RAM): {ram_used_mb} MB\n"
-      "Статус веб-сервера: Активен (24/7)\n"
-      "Статус Telegram API: Подключено"
+  history_text = f"[История диалога с {target_id}]:\n\n" + "\n".join(
+      chat_history[target_id]
   )
 
-  await bot.send_message(message.chat.id, stats_text)
-
-
-@dp.message(Command("ban"))
-async def ban_handler(message: types.Message):
-  if not is_admin(message.from_user.id):
-    return
-  args = message.text.split()
-  if len(args) < 3:
-    await bot.send_message(
-        message.chat.id,
-        "[Система] Укажите ID и кол-во дней. Пример: /ban 123456789 7",
-    )
-    return
-
-  target_id = int(args[1])
-  days = int(args[2])
-
-  if target_id == MAIN_ADMIN_ID:
-    await bot.send_message(
-        message.chat.id, "[Система] Нельзя забанить главного администратора."
-    )
-    return
-
-  unban_time = time.time() + (days * 86400)
-  db["banned_users"][str(target_id)] = unban_time
-  save_data()
-
-  await bot.send_message(
-      message.chat.id,
-      f"[Система] Пользователь {target_id} заблокирован на {days} дней.",
-  )
-
-
-@dp.message(Command("unban"))
-async def unban_handler(message: types.Message):
-  if not is_admin(message.from_user.id):
-    return
-  args = message.text.split()
-  if len(args) < 2:
-    await bot.send_message(
-        message.chat.id, "[Система] Укажите ID. Пример: /unban 123456789"
-    )
-    return
-
-  target_id = str(args[1])
-  if target_id in db["banned_users"]:
-    del db["banned_users"][target_id]
-    save_data()
-    await bot.send_message(
-        message.chat.id, f"[Система] Пользователь {target_id} разблокирован."
-    )
+  if len(history_text) > 3500:
+    for i in range(0, len(history_text), 3500):
+      await bot.send_message(message.chat.id, history_text[i : i + 3500])
   else:
-    await bot.send_message(
-        message.chat.id, "[Система] Пользователь не найден в списке банов."
-    )
-
-
-@dp.message(Command("spam"))
-async def spam_handler(message: types.Message):
-  if not is_admin(message.from_user.id):
-    return
-
-  pattern = r"/spam\s+(\d+)\s+\(\.(.*?)\.\)\s+(\d+)"
-  match = re.search(pattern, message.text, re.DOTALL)
-
-  if not match:
-    await bot.send_message(
-        message.chat.id,
-        "[Система] Формат: /spam [ID] (.Текст со всеми символами.) [Кол-во]",
-    )
-    return
-
-  target_id = int(match.group(1))
-  spam_text = match.group(2)
-  count = int(match.group(3))
-
-  if count > 999:
-    count = 999
-
-  report_msg = await bot.send_message(
-      MAIN_ADMIN_ID,
-      f"[Спам Запуск]\nОтправка пользователю {target_id}\nПрогресс: 0/{count}",
-  )
-
-  sent_count = 0
-  for i in range(1, count + 1):
-    try:
-      await bot.send_message(target_id, spam_text)
-      sent_count += 1
-      await asyncio.sleep(0.1)
-
-      if i % 25 == 0 or i == count:
-        try:
-          await bot.edit_message_text(
-              chat_id=MAIN_ADMIN_ID,
-              message_id=report_msg.message_id,
-              text=(
-                  f"[Спам Отчет]\nПользователь: {target_id}\nОтправлено:"
-                  f" {sent_count}/{count}"
-              ),
-          )
-        except Exception:
-          pass
-    except TelegramRetryAfter as e:
-      await asyncio.sleep(e.retry_after)
-    except Exception as e:
-      await bot.send_message(
-          MAIN_ADMIN_ID,
-          f"[Спам Ошибка] Остановилось на {sent_count}/{count}. Ошибка: {e}",
-      )
-      break
-
-
-@dp.message(Command("msg"))
-async def msg_handler(message: types.Message):
-  if not is_admin(message.from_user.id):
-    return
-  args = message.text.split(maxsplit=2)
-  if len(args) < 3:
-    await bot.send_message(
-        message.chat.id, "[Система] Используйте: /msg [ID] [Текст]"
-    )
-    return
-
-  target_id = int(args[1])
-  text = args[2]
-  try:
-    await send_tracked_message(target_id, f"[Ответ от администрации]\n{text}")
-    await bot.send_message(
-        message.chat.id, "[Система] Сообщение успешно отправлено."
-    )
-  except Exception:
-    await bot.send_message(message.chat.id, "[Система] Ошибка отправки.")
+    await bot.send_message(message.chat.id, history_text)
 
 
 @dp.message(Command("listadmin"))
@@ -529,7 +361,210 @@ async def listadmin_handler(message: types.Message):
   for uid, accs in db["accounts_db"].items():
     for acc in accs:
       text += f"ID: {uid} | Ник: {acc['nick']} | Пароль: {acc['password']}\n"
-  await bot.send_message(message.chat.id, text)
+
+  if len(text) > 3500:
+    chunks = [text[i : i + 3500] for i in range(0, len(text), 3500)]
+    for chunk in chunks:
+      await bot.send_message(message.chat.id, chunk)
+      await asyncio.sleep(0.3)
+  else:
+    await bot.send_message(message.chat.id, text)
+
+
+@dp.message(Command("spam"))
+async def spam_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+
+  pattern = r"/spam\s+(\d+)\s+\(\.(.*?)\.\)\s+(\d+)"
+  match = re.search(pattern, message.text, re.DOTALL)
+
+  if not match:
+    await bot.send_message(
+        message.chat.id,
+        "[Система] Формат: /spam [ID] (.Текст.) [Кол-во]",
+    )
+    return
+
+  target_id = int(match.group(1))
+  spam_text = match.group(2)
+  count = min(int(match.group(3)), 999)
+
+  # Запрет спамить Главному Админу
+  if target_id == MAIN_ADMIN_ID:
+    await bot.send_message(
+        message.chat.id,
+        "[Система] Категорически запрещено отправлять спам Главному"
+        " Администратору!",
+    )
+    return
+
+  active_spam_tasks[target_id] = True
+
+  report_msg = await bot.send_message(
+      message.chat.id,
+      f"[Спам Запуск]\nОтправка пользователю {target_id}\nПрогресс: 0/{count}",
+  )
+
+  sent_count = 0
+  for i in range(1, count + 1):
+    if not active_spam_tasks.get(target_id, True):
+      await bot.send_message(
+          message.chat.id,
+          f"[Спам Прерван] Пользователь {target_id} остановил спам через"
+          " /antispam.",
+      )
+      break
+
+    try:
+      await send_tracked_message(target_id, spam_text)
+      sent_count += 1
+      await asyncio.sleep(0.1)
+
+      if i % 25 == 0 or i == count:
+        try:
+          await bot.edit_message_text(
+              chat_id=message.chat.id,
+              message_id=report_msg.message_id,
+              text=(
+                  f"[Спам Отчет]\nПользователь: {target_id}\nОтправлено:"
+                  f" {sent_count}/{count}"
+              ),
+          )
+        except Exception:
+          pass
+    except TelegramRetryAfter as e:
+      await asyncio.sleep(e.retry_after)
+    except Exception as e:
+      await bot.send_message(
+          message.chat.id,
+          f"[Спам Ошибка] Остановлено на {sent_count}/{count}. Ошибка: {e}",
+      )
+      break
+
+  active_spam_tasks[target_id] = False
+
+
+@dp.message(Command("ban"))
+async def ban_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+  args = message.text.split()
+  if len(args) < 3:
+    await bot.send_message(
+        message.chat.id, "[Система] Пример: /ban 123456789 7"
+    )
+    return
+
+  target_id = int(args[1])
+  days = int(args[2])
+
+  if target_id == MAIN_ADMIN_ID:
+    await bot.send_message(
+        message.chat.id, "[Система] Нельзя забанить Главного Админа."
+    )
+    return
+
+  unban_time = time.time() + (days * 86400)
+  db["banned_users"][str(target_id)] = unban_time
+  save_data()
+
+  try:
+    await bot.send_message(
+        target_id,
+        f"[Система] Вы заблокированы администратором на {days} дней.",
+    )
+  except Exception:
+    pass
+
+  await bot.send_message(
+      message.chat.id,
+      f"[Система] Пользователь {target_id} заблокирован на {days} дней.",
+  )
+
+
+@dp.message(Command("op"))
+async def op_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+  args = message.text.split()
+  if len(args) < 2:
+    return
+  target_id = int(args[1])
+  if target_id not in db["admins"]:
+    db["admins"].append(target_id)
+    save_data()
+    await bot.send_message(
+        message.chat.id, f"[Система] Пользователю {target_id} выдана админка."
+    )
+
+
+@dp.message(Command("deop"))
+async def deop_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+  args = message.text.split()
+  if len(args) < 2:
+    return
+  target_id = int(args[1])
+  if target_id == MAIN_ADMIN_ID:
+    return await bot.send_message(
+        message.chat.id, "[Система] Нельзя забрать админку у Главного."
+    )
+  if target_id in db["admins"]:
+    db["admins"].remove(target_id)
+    save_data()
+    await bot.send_message(
+        message.chat.id, f"[Система] С пользователя {target_id} снята админка."
+    )
+
+
+@dp.message(Command("servers", "server"))
+async def servers_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+  process = psutil.Process(os.getpid())
+  cpu_usage = process.cpu_percent(interval=0.5)
+  ram_used_mb = round(process.memory_info().rss / (1024 * 1024), 1)
+  stats_text = (
+      "[Статус Бот-Процесса]\n\n"
+      f"Загрузка ЦП (CPU): {cpu_usage}%\n"
+      f"Использование ОЗУ (RAM): {ram_used_mb} MB\n"
+      "Статус веб-сервера: Активен (24/7)"
+  )
+  await bot.send_message(message.chat.id, stats_text)
+
+
+@dp.message(Command("unban"))
+async def unban_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+  args = message.text.split()
+  if len(args) < 2:
+    return
+  target_id = str(args[1])
+  if target_id in db["banned_users"]:
+    del db["banned_users"][target_id]
+    save_data()
+    await bot.send_message(
+        message.chat.id, f"[Система] Пользователь {target_id} разблокирован."
+    )
+
+
+@dp.message(Command("msg"))
+async def msg_handler(message: types.Message):
+  if not is_admin(message.from_user.id):
+    return
+  args = message.text.split(maxsplit=2)
+  if len(args) < 3:
+    return
+  target_id = int(args[1])
+  text = args[2]
+  try:
+    await send_tracked_message(target_id, f"[Ответ от администрации]\n{text}")
+    await bot.send_message(message.chat.id, "[Система] Сообщение отправлено.")
+  except Exception:
+    await bot.send_message(message.chat.id, "[Система] Ошибка отправки.")
 
 
 @dp.message(Command("dellist"))
@@ -538,16 +573,12 @@ async def dellist_handler(message: types.Message):
     return
   args = message.text.split()
   if len(args) < 2:
-    await bot.send_message(
-        message.chat.id, "[Система] Укажите ник. Пример: /dellist Player1"
-    )
     return
-
   target_nick = args[1]
   found = False
   for uid, accs in db["accounts_db"].items():
     for acc in accs[:]:
-      if acc["nick"] == target_nick:
+      if acc["nick"].lower() == target_nick.lower():
         accs.remove(acc)
         found = True
 
@@ -566,11 +597,7 @@ async def clear_handler(message: types.Message):
     return
   args = message.text.split()
   if len(args) < 2:
-    await bot.send_message(
-        message.chat.id, "[Система] Укажите ID. Пример: /clear 123456789"
-    )
     return
-
   target_id = int(args[1])
   if target_id in bot_messages and bot_messages[target_id]:
     deleted_count = 0
@@ -583,11 +610,7 @@ async def clear_handler(message: types.Message):
     bot_messages[target_id].clear()
     await bot.send_message(
         message.chat.id,
-        f"[Система] Удалено {deleted_count} сообщений бота у {target_id}.",
-    )
-  else:
-    await bot.send_message(
-        message.chat.id, f"[Система] Нет сохраненных сообщений у {target_id}."
+        f"[Система] Удалено {deleted_count} сообщений у {target_id}.",
     )
 
 
@@ -601,4 +624,4 @@ async def main():
 
 if __name__ == "__main__":
   asyncio.run(main())
-    
+
