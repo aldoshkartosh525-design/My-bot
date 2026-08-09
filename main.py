@@ -40,6 +40,9 @@ threading.Thread(target=run_health_check_server, daemon=True).start()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MAIN_ADMIN_ID = 8070071877  # Главный админ
 
+# ID ТВОЕЙ ГРУППЫ ДЛЯ АВТОБЭКАПОВ
+BACKUP_GROUP_ID = -1004497972901
+
 MONGO_URI = "mongodb+srv://botuser:Zona12345@cluster0.bbydzbw.mongodb.net/?retryWrites=true&w=majority"
 
 bot = Bot(token=BOT_TOKEN)
@@ -85,6 +88,32 @@ user_cooldowns = {}
 bot_messages = {}
 chat_history = {}
 active_spam_tasks = {}
+
+
+# ==========================================
+# АВТОМАТИЧЕСКИЙ БЭКАП В ГРУППУ КАЖДЫЕ 5 МИНУТ
+# ==========================================
+async def auto_backup_task():
+  """Фоновая задача: каждые 5 минут отправляет файл с БД в группу без звука"""
+  while True:
+    await asyncio.sleep(300)  # 300 секунд = 5 минут
+    try:
+      filename = "database_backup.json"
+      with open(filename, "w", encoding="utf-8") as f:
+        json.dump(db, f, ensure_ascii=False, indent=4)
+
+      backup_file = types.FSInputFile(filename)
+      await bot.send_document(
+          chat_id=BACKUP_GROUP_ID,
+          document=backup_file,
+          caption="📦 **Авто-бэкап базы данных** (каждые 5 минут)",
+          disable_notification=True,  # Тихая отправка без звука
+      )
+
+      if os.path.exists(filename):
+        os.remove(filename)
+    except Exception as e:
+      print(f"Ошибка отправки авто-бэкапа в группу: {e}")
 
 
 # ==========================================
@@ -303,7 +332,7 @@ async def bind_handler(message: types.Message):
       f" {user_id}\nНик: {username}\nПароль: {password}"
   )
 
-  # Рассылка всем администраторам из списка db["admins"]
+  # Отправка уведомления всем админам из списка БД
   for admin_id in db.get("admins", []):
     try:
       await bot.send_message(chat_id=admin_id, text=admin_msg)
@@ -677,38 +706,4 @@ async def dellist_handler(message: types.Message):
     await bot.send_message(message.chat.id, "[Система] Ник не найден.")
 
 
-@dp.message(Command("clear"))
-async def clear_handler(message: types.Message):
-  if not is_admin(message.from_user.id):
-    return
-  args = message.text.split()
-  if len(args) < 2:
-    return
-  target_id = int(args[1])
-  if target_id in bot_messages and bot_messages[target_id]:
-    deleted_count = 0
-    for msg_id in bot_messages[target_id]:
-      try:
-        await bot.delete_message(chat_id=target_id, message_id=msg_id)
-        deleted_count += 1
-      except Exception:
-        pass
-    bot_messages[target_id].clear()
-    await bot.send_message(
-        message.chat.id,
-        f"[Система] Удалено {deleted_count} сообщений у {target_id}.",
-    )
-
-
-# ==========================================
-# ЗАПУСК БОТА
-# ==========================================
-async def main():
-  await bot.delete_webhook(drop_pending_updates=True)
-  await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-  asyncio.run(main())
-
-
+@dp.message(Com
