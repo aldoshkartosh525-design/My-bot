@@ -31,14 +31,14 @@ const client = bedrock.createClient({
   port: SERVER_PORT,
   username: USERNAME,
   offline: true,
-  version: '1.21.35', // Версия 1.21.35
+  version: '1.21.30', // Стабильная поддерживаемая версия из протокола
   clientData: {
-    DeviceOS: 1,                          // 1 = Android (эмуляция мобильного устройства)
+    DeviceOS: 1,                          // 1 = Android (строгая эмуляция мобильного устройства)
     DeviceModel: 'Samsung Galaxy S23',    // Реалистичная модель телефона
     CurrentInputMode: 2,                  // 2 = Сенсорный ввод (Touch)
     DefaultInputMode: 2,                  // Сенсор по умолчанию
     PlatformType: 1,                      // 1 = Mobile платформа
-    GameVersion: '1.21.35',
+    GameVersion: '1.21.30',
     GuiScale: 0,
     UIProfile: 1                          // 1 = Pocket / Mobile UI
   }
