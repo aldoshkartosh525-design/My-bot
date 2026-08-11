@@ -26,7 +26,7 @@ const PASSWORD = 'zona1234';
 // Инициализация Telegram-бота
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
-// Подключение к серверу Bedrock с поддержкой версии 1.21.70
+// Подключение к серверу Bedrock
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
@@ -169,13 +169,24 @@ function startFlyLoop() {
     const randomPitch = (Math.random() - 0.5) * 0.3;
     const randomYaw = (Math.random() - 0.5) * 0.3;
 
-    client.write('player_auth_input', {
-      pitch: randomPitch,
-      yaw: randomYaw,
-      position: { x: currentPosition.x, y: currentPosition.y + yWiggle, z: currentPosition.z },
-      move_vector: { x: 0, z: speedRandom },
-      input_data: { start_gliding: true }
-    });
+    try {
+      client.write('player_auth_input', {
+        pitch: randomPitch,
+        yaw: randomYaw,
+        position: { x: currentPosition.x, y: currentPosition.y + yWiggle, z: currentPosition.z },
+        move_vector: { x: 0, z: speedRandom },
+        head_yaw: randomYaw,
+        input_data: { start_gliding: true },
+        input_mode: 'mouse',
+        play_mode: 'normal',
+        interaction_model: 'touch',
+        gaze_direction: { x: 0, y: 0, z: 0 },
+        tick: 0n,
+        delta: { x: 0, y: yWiggle, z: speedRandom }
+      });
+    } catch (err) {
+      console.error('Ошибка отправки пакета движения:', err.message);
+    }
   }, 50);
 }
 
@@ -268,11 +279,23 @@ function safeLandAndDisconnect(reason) {
     }
 
     currentPosition.y -= 1.0;
-    client.write('player_auth_input', {
-      pitch: 20,
-      yaw: 0,
-      position: currentPosition,
-      move_vector: { x: 0, z: 0.3 }
-    });
+    try {
+      client.write('player_auth_input', {
+        pitch: 20,
+        yaw: 0,
+        position: { x: currentPosition.x, y: currentPosition.y, z: currentPosition.z },
+        move_vector: { x: 0, z: 0.3 },
+        head_yaw: 0,
+        input_data: {},
+        input_mode: 'mouse',
+        play_mode: 'normal',
+        interaction_model: 'touch',
+        gaze_direction: { x: 0, y: 0, z: 0 },
+        tick: 0n,
+        delta: { x: 0, y: -1.0, z: 0.3 }
+      });
+    } catch (err) {
+      console.error('Ошибка движения при посадке:', err.message);
+    }
   }, 50);
 }
