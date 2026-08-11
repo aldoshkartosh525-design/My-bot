@@ -31,7 +31,7 @@ const client = bedrock.createClient({
   port: SERVER_PORT,
   username: USERNAME,
   offline: true,
-  version: '1.21.30', // Стабильная поддерживаемая версия из протокола
+  version: '1.21.30', // Стабильный протокол
   clientData: {
     DeviceOS: 1,                          // 1 = Android (строгая эмуляция мобильного устройства)
     DeviceModel: 'Samsung Galaxy S23',    // Реалистичная модель телефона
@@ -51,7 +51,6 @@ let rocketsCount = 885;
 let isFlying = true;
 let isBotActive = true;
 let highestGroundY = 65;
-let flyInterval = null;
 let lastFoodCommandTime = 0;
 
 // --- 2. КОМАНДЫ ТЕЛЕГРАМ (/off И /on) ---
@@ -68,7 +67,6 @@ tgBot.on('message', (msg) => {
     }
     isBotActive = false;
     isFlying = false;
-    if (flyInterval) clearInterval(flyInterval);
     tgBot.sendMessage(TG_CHAT_ID, '🛑 Получена команда **/off**. Начинаем безопасную посадку...', { parse_mode: 'Markdown' });
     safeLandAndDisconnect('🛑 **Принудительное отключение через Telegram (/off).**');
   }
@@ -83,14 +81,12 @@ client.on('kick', (reason) => {
   console.log('Бот кикнут:', reason);
   const reasonText = typeof reason === 'object' ? JSON.stringify(reason) : reason;
   tgBot.sendMessage(TG_CHAT_ID, `❌ **Бота кикнули с сервера!**\nПричина: \`${reasonText}\``, { parse_mode: 'Markdown' });
-  if (flyInterval) clearInterval(flyInterval);
   process.exit(1);
 });
 
 client.on('close', () => {
   console.log('Соединение разорвано.');
   tgBot.sendMessage(TG_CHAT_ID, '⚠️ **Соединение с сервером разорвано (Disconnect/Close).**');
-  if (flyInterval) clearInterval(flyInterval);
   process.exit(1);
 });
 
@@ -129,7 +125,7 @@ client.on('spawn', () => {
 
   tgBot.sendMessage(
     TG_CHAT_ID,
-    `🤖 **Бот ${USERNAME} вошел на сервер (Прямое подключение)!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
+    `🤖 **Бот ${USERNAME} вошел на сервер (Прямое подключение, эмуляция Android)!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
     { parse_mode: 'Markdown' }
   );
 
@@ -154,15 +150,12 @@ client.on('set_health', (packet) => {
   }
 });
 
-// --- 6. ЦИКЛ ПОЛЁТА С МОБИЛЬНЫМИ ПАРАМЕТРАМИ ---
+// --- 6. АНТИ-АНТИЧИТ ЦИКЛ ПОЛЁТА (ПЛАВАЮЩИЙ ТАЙМЕР И МИКРО-ДВИЖЕНИЯ СЕНСОРА) ---
 function startFlyLoop() {
   let tickCounter = 0;
 
-  flyInterval = setInterval(() => {
-    if (!isFlying || !isBotActive) {
-      clearInterval(flyInterval);
-      return;
-    }
+  function sendFlightTick() {
+    if (!isFlying || !isBotActive) return;
 
     tickCounter++;
 
@@ -181,7 +174,6 @@ function startFlyLoop() {
           tgBot.sendMessage(TG_CHAT_ID, `🔄 Элитра разряжена! Переключение на следующую. Осталось: ${totalElytras}/4.`);
         } else {
           isFlying = false;
-          clearInterval(flyInterval);
           safeLandAndDisconnect('⚠️ **Все 4 элитры разряжены!** Бот снижается.');
           return;
         }
@@ -189,33 +181,44 @@ function startFlyLoop() {
 
       if (rocketsCount <= 0) {
         isFlying = false;
-        clearInterval(flyInterval);
         safeLandAndDisconnect('🚀 **Закончились все 885 ракет!** Начинаем посадку.');
         return;
       }
     }
 
-    const speedRandom = 1.48 + Math.random() * 0.04;
+    const speedRandom = 1.45 + Math.random() * 0.08;
     currentPosition.z += speedRandom;
+
+    // Живые микро-колебания камеры (палец на сенсоре телефона)
+    const microYaw = (Math.random() - 0.5) * 0.4;
+    const microPitch = (Math.random() - 0.5) * 0.2;
 
     try {
       client.write('player_auth_input', {
-        pitch: 0,
-        yaw: 0,
+        pitch: microPitch,
+        yaw: microYaw,
         position: { x: currentPosition.x, y: currentPosition.y, z: currentPosition.z },
-        move_vector: { x: 0, z: speedRandom },
-        head_yaw: 0,
+        move_vector: { x: (Math.random() - 0.5) * 0.02, z: speedRandom },
+        head_yaw: microYaw,
         input_data: { start_gliding: true },
-        input_mode: 2,         // 2 = Сенсорный ввод (маскировка под телефон)
-        play_mode: 0,          // Обычный игровой режим
-        interaction_model: 0,  // Сенсорное взаимодействие
+        input_mode: 2,         // Строго сенсорный ввод
+        play_mode: 0,
+        interaction_model: 0,
         gaze_direction: { x: 0, y: 0, z: 0 },
-        tick: 0n
+        tick: BigInt(tickCounter)
       });
     } catch (err) {
       console.error('Ошибка отправки движения:', err.message);
     }
-  }, 50);
+
+    // Плавающий интервал таймера (убирает робо-тайминги ПК)
+    if (isFlying && isBotActive) {
+      const randomDelay = 45 + Math.floor(Math.random() * 11);
+      setTimeout(sendFlightTick, randomDelay);
+    }
+  }
+
+  sendFlightTick();
 }
 
 // --- 7. АНАЛИЗ ЧАНКОВ И СКАНЕР ---
@@ -251,7 +254,7 @@ client.on('level_chunk', async (packet) => {
     let msg = `🚨 **ЦЕННАЯ НАХОДКА В ЧАНКЕ!**\n`;
     msg += `📍 **Координаты:** X: ${posX}, Y: ${Math.round(currentPosition.y)}, Z: ${posZ}\n\n`;
 
-    if (shulkersCount > 0) msg += `📦 **Шалкеров:** ${shulkersCount}\n`;
+    if (shulkersCount > 0) msg += `📦 **Шалькеров:** ${shulkersCount}\n`;
     if (spawnersCount > 0) msg += `🔥 **Спавнеров:** ${spawnersCount}\n`;
 
     await tgBot.sendMessage(TG_CHAT_ID, msg, { parse_mode: 'Markdown' });
@@ -324,4 +327,5 @@ function safeLandAndDisconnect(reason) {
       console.error('Ошибка движения при посадке:', err.message);
     }
   }, 50);
-}
+  }
+
