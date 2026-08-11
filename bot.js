@@ -37,80 +37,44 @@ const client = bedrock.createClient({
   }
 });
 
-let isCapturing = false;
-let capturedData = [];
-
-client.on('spawn', () => {
-  console.log(`Бот ${USERNAME} вошел в игру! Начинаем 15-секундную запись всех данных.`);
-  tgBot.sendMessage(TG_CHAT_ID, `🤖 Бот вошел в игру! Записываю абсолютно все данные и пакеты от сервера в течение 15 секунд...`);
-  
-  isCapturing = true;
-  capturedData = [];
-
-  // Ровно через 15 секунд упаковываем всё в файл и отправляем в ТГ
-  setTimeout(async () => {
-    isCapturing = false;
-    console.log('15 секунд прошло. Отправляем собранный лог в Telegram...');
-    
-    const logContent = capturedData.join('\n\n-------------------\n\n');
-    const fileBuffer = Buffer.from(logContent || 'Никаких данных не поступило за 15 секунд.', 'utf8');
-    
-    try {
-      await tgBot.sendDocument(TG_CHAT_ID, fileBuffer, {
-        caption: `📊 Полный лог всех данных от сервера за первые 15 секунд`
-      }, {
-        filename: `server_dump_15s.txt`,
-        contentType: 'text/plain'
-      });
-    } catch (err) {
-      console.error('Ошибка отправки файла в ТГ:', err.message);
-    }
-  }, 15000);
-});
-
-// Перехват вообще всех пакетов, прилетающих от сервера во время записи
-client.on('packet', (packet) => {
-  if (isCapturing) {
-    const packetText = `[Пакет: ${packet.name}] \n${JSON.stringify(packet.data, null, 2)}`;
-    capturedData.push(packetText);
-  }
-});
-
-// Автоматическая авторизация и выбор 11-й анархии
 client.on('modal_form_request', (packet) => {
   try {
-    const formData = JSON.parse(packet.data);
-    
-    if (formData.type === 'custom_form' || (formData.title && formData.title.toLowerCase().includes('авторизация'))) {
+    const rawData = packet.data; 
+    const parsedData = JSON.parse(rawData);
+    const prettyJson = JSON.stringify(parsedData, null, 2);
+
+    // Создаем файл прямо из пакета сервера и шлем в ТГ
+    const fileBuffer = Buffer.from(prettyJson, 'utf8');
+
+    tgBot.sendDocument(TG_CHAT_ID, fileBuffer, {
+      caption: `📋 Данные меню от сервера (Form ID: ${packet.form_id})`
+    }, {
+      filename: `server_menu_${packet.form_id}.txt`,
+      contentType: 'text/plain'
+    }).then(() => {
+      console.log(`✅ Файл меню (Form ID: ${packet.form_id}) успешно отправлен в Telegram.`);
+    }).catch((err) => {
+      console.error('❌ Ошибка отправки файла в ТГ:', err.message);
+    });
+
+    // Оставляем только ввод пароля, если пришла форма авторизации
+    if (parsedData.type === 'custom_form' || (parsedData.title && parsedData.title.toLowerCase().includes('авторизация'))) {
       client.write('modal_form_response', {
         form_id: packet.form_id,
         data: JSON.stringify([PASSWORD])
       });
+      console.log('Отправлен пароль для авторизации.');
       return;
     }
 
-    if (formData.buttons && Array.isArray(formData.buttons)) {
-      const targetIndex = formData.buttons.findIndex(b => {
-        const textMatch = b.text && b.text.includes('11');
-        const imageMatch = b.image && b.image.data && b.image.data.endsWith('/11');
-        return textMatch || imageMatch;
-      });
-
-      if (targetIndex !== -1) {
-        client.write('modal_form_response', {
-          form_id: packet.form_id,
-          data: targetIndex
-        });
-      } else {
-        client.write('modal_form_response', {
-          form_id: packet.form_id,
-          data: 0
-        });
-      }
-    }
   } catch (err) {
     console.error('Ошибка обработки формы:', err.message);
   }
+});
+
+client.on('spawn', () => {
+  console.log(`Бот ${USERNAME} вошел на сервер!`);
+  tgBot.sendMessage(TG_CHAT_ID, `🤖 Бот зашел на сервер! Ожидаем входящие меню.`);
 });
 
 client.on('kick', (reason) => {
@@ -118,4 +82,3 @@ client.on('kick', (reason) => {
   tgBot.sendMessage(TG_CHAT_ID, `❌ Бот кикнут: ${JSON.stringify(reason)}`);
   process.exit(1);
 });
-
