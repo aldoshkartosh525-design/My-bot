@@ -1,3 +1,7 @@
+// Заглушка HTTP-сервера, чтобы Render не закрывал процесс из-за отсутствия открытых портов
+const http = require('http');
+http.createServer((req, res) => res.end('Bot is running!')).listen(process.env.PORT || 3000);
+
 const bedrock = require('bedrock-protocol');
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
@@ -22,19 +26,20 @@ const PASSWORD = 'zona1234';
 // Инициализация Telegram-бота
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
-// Подключение к серверу Bedrock
+// Подключение к серверу Bedrock с точной версией 1.21.92
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
   username: USERNAME,
-  offline: true
+  offline: true,
+  version: '1.21.92'
 });
 
 // Состояние ресурсов и полёта
 let currentPosition = { x: -2420, y: 290, z: -2500 };
 let totalElytras = 4;                 // 4 элитры с Нерушимостью III
 let currentElytraDurability = 1728;   // Прочность текущей элитры
-let rocketsCount = 885;               // 14 стаков ракет (13x64 + 53)
+let rocketsCount = 885;               // 14 стаков ракет
 let isFlying = true;
 let isBotActive = true;
 let highestGroundY = 65;              // Вычисление высоты земли
@@ -174,7 +179,7 @@ function startFlyLoop() {
   }, 50);
 }
 
-// --- 6. АНАЛИЗ ЧАНКОВ, ПОИСК ШАЛКЕРОВ/СПАВНЕРОВ И СОЗДАНИЕ NBT- ДАМПА ---
+// --- 6. АНАЛИЗ ЧАНКОВ, ПОИСК ШАЛКЕРОВ/СПАВНЕРОВ И СОЗДАНИЕ NBT-ДАМПА ---
 client.on('level_chunk', async (packet) => {
   let shulkersCount = 0;
   let spawnersCount = 0;
