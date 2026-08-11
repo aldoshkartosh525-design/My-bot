@@ -26,13 +26,13 @@ const PASSWORD = 'zona1234';
 // Инициализация Telegram-бота
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
-// Подключение к серверу Bedrock с точной версией 1.21.92
+// Подключение к серверу Bedrock с поддержкой версии 1.21.70
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
   username: USERNAME,
   offline: true,
-  version: '1.21.92'
+  version: '1.21.70'
 });
 
 // Состояние ресурсов и полёта
@@ -276,4 +276,3 @@ function safeLandAndDisconnect(reason) {
     });
   }, 50);
 }
-
