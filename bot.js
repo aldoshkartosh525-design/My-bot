@@ -19,13 +19,13 @@ const TG_CHAT_ID = '8070071877';
 
 // --- КОНФИГУРАЦИЯ СЕРВЕРА MINECRAFT ---
 const SERVER_HOST = 'phoenix-pe.ru';
-const SERVER_PORT = 19135;
+const SERVER_PORT = 19132; // Изменено на 19132
 const USERNAME = 'RiverSauce1216';
 const PASSWORD = 'zona1234';
 
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
-// --- ПОДКЛЮЧЕНИЕ С ЭМУЛЯЦИЕЙ ANDROID (ОБХОД ПРОВЕРКИ ПК) ---
+// --- ПОДКЛЮЧЕНИЕ С ЭМУЛЯЦИЕЙ ANDROID ДЛЯ ОБХОДА БЛОКИРОВОК ПК ---
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
@@ -34,13 +34,13 @@ const client = bedrock.createClient({
   version: '1.21.70',
   clientData: {
     DeviceOS: 1,                         // 1 = Android
-    DeviceModel: 'Xiaomi POCO X5 Pro 5G',// Модель популярного смартфона
-    CurrentInputMode: 2,                 // 2 = Сенсорный ввод (Touch)
-    DefaultInputMode: 2,                 // 2 = Сенсорный экран
-    PlatformType: 1,                     // Мобильная платформа
+    DeviceModel: 'Xiaomi POCO X5 Pro 5G',
+    CurrentInputMode: 2,                 // Сенсорный ввод
+    DefaultInputMode: 2,
+    PlatformType: 1,
     GameVersion: '1.21.70',
     GuiScale: 0,
-    UIProfile: 1                          // 1 = Pocket UI (Мобильный интерфейс)
+    UIProfile: 1
   }
 });
 
@@ -99,17 +99,61 @@ client.on('error', (err) => {
   tgBot.sendMessage(TG_CHAT_ID, `⚠️ **Ошибка подключения:** ${err.message}`);
 });
 
-// --- 4. АВТОРИЗАЦИЯ НА СЕРВЕРЕ ---
+// --- 4. АВТО-ПЕРЕХОД ПО МЕНЮ (НАЖАТИЕ 2x2 И 11 АНАРХИИ) И АВТОРИЗАЦИЯ ---
 client.on('modal_form_request', (packet) => {
-  console.log('Зафиксирована UI-форма авторизации. Отправляем пароль...');
-  client.write('modal_form_response', {
-    form_id: packet.form_id,
-    data: JSON.stringify([PASSWORD])
-  });
+  try {
+    const formData = JSON.parse(packet.data);
+    console.log('Получена форма:', formData.title || formData.type);
+
+    // 1. Если это форма авторизации / ввода пароля
+    if (formData.type === 'custom_form' || (formData.title && formData.title.toLowerCase().includes('авторизация'))) {
+      console.log('Отправляем пароль...');
+      client.write('modal_form_response', {
+        form_id: packet.form_id,
+        data: JSON.stringify([PASSWORD])
+      });
+      return;
+    }
+
+    // 2. Если это меню с кнопками выборов режимов
+    if (formData.buttons && Array.isArray(formData.buttons)) {
+      // Ищем индекс кнопки "2x2"
+      const btn2x2Index = formData.buttons.findIndex(b => b.text && b.text.includes('2x2'));
+      // Ищем индекс кнопки "11" или "1-1"
+      const btn11Index = formData.buttons.findIndex(b => b.text && (b.text.includes('11') || b.text.includes('1-1')));
+
+      // Шаг 1: Если находимся в главном меню и есть кнопка 2x2, но еще нет кнопки 11
+      if (btn2x2Index !== -1 && btn11Index === -1) {
+        console.log(`Нажимаем категорию "2x2" (кнопка #${btn2x2Index})...`);
+        client.write('modal_form_response', {
+          form_id: packet.form_id,
+          data: JSON.stringify(btn2x2Index)
+        });
+        return;
+      }
+
+      // Шаг 2: Если открылось меню 2x2 и появится кнопка 11 (или 1-1)
+      if (btn11Index !== -1) {
+        console.log(`Нажимаем "Анархия 11" (кнопка #${btn11Index})...`);
+        client.write('modal_form_response', {
+          form_id: packet.form_id,
+          data: JSON.stringify(btn11Index)
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    console.error('Ошибка при обработке формы:', err.message);
+    // Запасной вариант: отправляем пароль
+    client.write('modal_form_response', {
+      form_id: packet.form_id,
+      data: JSON.stringify([PASSWORD])
+    });
+  }
 });
 
 client.on('spawn', () => {
-  console.log(`Бот ${USERNAME} успешно подключен с устройства Android!`);
+  console.log(`Бот ${USERNAME} успешно подключен к ${SERVER_HOST}:${SERVER_PORT}`);
 
   setTimeout(() => {
     client.queue('text', {
@@ -124,7 +168,7 @@ client.on('spawn', () => {
 
   tgBot.sendMessage(
     TG_CHAT_ID,
-    `🤖 **Бот ${USERNAME} вошел на сервер!**\n📱 Устройство: POCO X5 Pro 5G (Android)\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
+    `🤖 **Бот ${USERNAME} вошел на Анархию 11!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
     { parse_mode: 'Markdown' }
   );
 
@@ -149,7 +193,7 @@ client.on('set_health', (packet) => {
   }
 });
 
-// --- 6. ЦИКЛ ПОЛЁТА С СЕНСОРНЫМИ ДАННЫМИ ---
+// --- 6. ЦИКЛ ПОЛЁТА ---
 function startFlyLoop() {
   let tickCounter = 0;
 
@@ -205,7 +249,7 @@ function startFlyLoop() {
         move_vector: { x: 0, z: speedRandom },
         head_yaw: randomYaw,
         input_data: { start_gliding: true },
-        input_mode: 'touch',               // Сенсорный ввод
+        input_mode: 'touch',
         play_mode: 'normal',
         interaction_model: 'touch',
         gaze_direction: { x: 0, y: 0, z: 0 },
@@ -326,4 +370,3 @@ function safeLandAndDisconnect(reason) {
     }
   }, 50);
 }
-
