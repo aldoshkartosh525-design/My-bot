@@ -1,18 +1,20 @@
 client.on('modal_form_request', (packet) => {
   try {
     const formData = JSON.parse(packet.data);
+    
+    // Превращаем весь объект формы в красивую строку, как в логах
+    const formattedLog = JSON.stringify(formData, null, 2);
     console.log('--- ПОЛУЧЕНО МЕНЮ ОТ СЕРВЕРА ---');
-    console.log('Заголовок:', formData.title);
-    console.log('Кнопки:', JSON.stringify(formData.buttons, null, 2));
+    console.log(formattedLog);
 
-    // СОЗДАЕМ И ОТПРАВЛЯЕМ ФАЙЛ С МЕНЮ В ТЕЛЕГРАМ
-    const fileName = `form_${packet.form_id}.json`;
-    fs.writeFileSync(fileName, JSON.stringify(formData, null, 2));
+    // ОТПРАВКА В TELEGRAM ТЕКСТОМ (или файлом .txt со строками)
+    const fileName = `log_${packet.form_id}.txt`;
+    fs.writeFileSync(fileName, formattedLog, 'utf8');
+    
     tgBot.sendDocument(TG_CHAT_ID, fileName, {
-      caption: `📋 Получено меню от сервера!\nЗаголовок: ${formData.title || 'Без заголовка'}`
+      caption: `📋 Лог меню с сервера (ID: ${packet.form_id})`
     }).then(() => {
-      // Удаляем временный файл после отправки
-      fs.unlinkSync(fileName);
+      fs.unlinkSync(fileName); // Удаляем файл после отправки
     });
 
     // Если это форма авторизации — вводим пароль
@@ -46,5 +48,4 @@ client.on('modal_form_request', (packet) => {
     console.error('Ошибка обработки формы:', err.message);
   }
 });
-
 
