@@ -45,14 +45,14 @@ client.on('modal_form_request', (packet) => {
     console.log('--- ПОЛУЧЕНО МЕНЮ ОТ СЕРВЕРА ---');
     console.log(formattedLog);
 
-    // Отправка файла с меню в Telegram для наглядности
-    const fileName = `log_${packet.form_id}.txt`;
+    // СОХРАНЯЕМ И ОТПРАВЛЯЕМ ПОЛНЫЙ ФАЙЛ С ДАННЫМИ МЕНЮ В TELEGRAM
+    const fileName = `menu_full_${packet.form_id}.txt`;
     fs.writeFileSync(fileName, formattedLog, 'utf8');
     tgBot.sendDocument(TG_CHAT_ID, fileName, {
-      caption: `📋 Меню от сервера (ID: ${packet.form_id})`
+      caption: `📋 Полные данные меню от сервера (ID: ${packet.form_id})`
     }).then(() => {
-      fs.unlinkSync(fileName);
-    });
+      fs.unlinkSync(fileName); // Удаляем файл после отправки
+    }).catch(err => console.error('Ошибка отправки файла в ТГ:', err.message));
 
     // Если это форма авторизации — вводим пароль
     if (formData.type === 'custom_form' || (formData.title && formData.title.toLowerCase().includes('авторизация'))) {
@@ -75,16 +75,19 @@ client.on('modal_form_request', (packet) => {
 
       if (targetIndex !== -1) {
         console.log(`✅ Найдена 11-я анархия под индексом: ${targetIndex}. Нажимаем...`);
+        
+        // Отправляем индекс корректно, чтобы сервер не кикал
         client.write('modal_form_response', {
           form_id: packet.form_id,
-          data: JSON.stringify(targetIndex)
+          data: targetIndex
         });
+        
         tgBot.sendMessage(TG_CHAT_ID, `🚀 Бот успешно выбрал 11-ю анархию (индекс ${targetIndex})!`);
       } else {
         console.log('⚠️ 11-я анархия не найдена по фильтру, нажимаем кнопку 0 по умолчанию');
         client.write('modal_form_response', {
           form_id: packet.form_id,
-          data: JSON.stringify(0)
+          data: 0
         });
       }
     }
@@ -103,5 +106,4 @@ client.on('kick', (reason) => {
   tgBot.sendMessage(TG_CHAT_ID, `❌ Бот кикнут: ${JSON.stringify(reason)}`);
   process.exit(1);
 });
-
 
