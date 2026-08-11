@@ -1,4 +1,4 @@
-// Заглушка HTTP-сервера, чтобы Render не закрывал процесс из-за отсутствия открытых портов
+// Заглушка HTTP-сервера для Render
 const http = require('http');
 http.createServer((req, res) => res.end('Bot is running!')).listen(process.env.PORT || 3000);
 
@@ -7,7 +7,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 
-// --- 1. ПРОВЕРКА ТОКЕНА ИЗ НАСТРОЕК RENDER ---
+// --- 1. ПРОВЕРКА ТОКЕНА ---
 const TG_TOKEN = process.env.TG_TOKEN;
 
 if (!TG_TOKEN) {
@@ -23,10 +23,8 @@ const SERVER_PORT = 19135;
 const USERNAME = 'RiverSauce1216';
 const PASSWORD = 'zona1234';
 
-// Инициализация Telegram-бота
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
-// Подключение к серверу Bedrock
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
@@ -35,14 +33,13 @@ const client = bedrock.createClient({
   version: '1.21.70'
 });
 
-// Состояние ресурсов и полёта
 let currentPosition = { x: -2420, y: 290, z: -2500 };
-let totalElytras = 4;                 // 4 элитры с Нерушимостью III
-let currentElytraDurability = 1728;   // Прочность текущей элитры
-let rocketsCount = 885;               // 14 стаков ракет
+let totalElytras = 4;
+let currentElytraDurability = 1728;
+let rocketsCount = 885;
 let isFlying = true;
 let isBotActive = true;
-let highestGroundY = 65;              // Вычисление высоты земли
+let highestGroundY = 65;
 let flyInterval = null;
 let lastFoodCommandTime = 0;
 
@@ -66,11 +63,32 @@ tgBot.on('message', (msg) => {
   }
 
   if (text === '/on') {
-    tgBot.sendMessage(TG_CHAT_ID, `ℹ️ **Статус бота:** ${isBotActive ? '🟢 Активен и летит' : '🔴 Отключен'}\n📍 **Высота:** Y=${Math.round(currentPosition.y)}\n🚀 **Ракет:** ${rocketsCount} шт.\n🛡 **Элитр:** ${totalElytras} шт.`, { parse_mode: 'Markdown' });
+    tgBot.sendMessage(TG_CHAT_ID, `ℹ️ **Статус бота:** ${isBotActive ? '🟢 Активен' : '🔴 Отключен'}\n📍 **Высота:** Y=${Math.round(currentPosition.y)}\n🚀 **Ракет:** ${rocketsCount} шт.\n🛡 **Элитр:** ${totalElytras} шт.`, { parse_mode: 'Markdown' });
   }
 });
 
-// --- 3. АВТОРИЗАЦИЯ НА СЕРВЕРЕ ---
+// --- 3. ОБРАБОТКА ВЫЛЕТОВ И КИКА С СЕРВЕРА ---
+client.on('kick', (reason) => {
+  console.log('Бот кикнут:', reason);
+  const reasonText = typeof reason === 'object' ? JSON.stringify(reason) : reason;
+  tgBot.sendMessage(TG_CHAT_ID, `❌ **Бота кикнули с сервера!**\nПричина: \`${reasonText}\``, { parse_mode: 'Markdown' });
+  if (flyInterval) clearInterval(flyInterval);
+  process.exit(1);
+});
+
+client.on('close', () => {
+  console.log('Соединение разорвано.');
+  tgBot.sendMessage(TG_CHAT_ID, '⚠️ **Соединение с сервером разорвано (Disconnect/Close).**');
+  if (flyInterval) clearInterval(flyInterval);
+  process.exit(1);
+});
+
+client.on('error', (err) => {
+  console.error('Ошибка сети:', err.message);
+  tgBot.sendMessage(TG_CHAT_ID, `⚠️ **Ошибка подключения:** ${err.message}`);
+});
+
+// --- 4. АВТОРИЗАЦИЯ НА СЕРВЕРЕ ---
 client.on('modal_form_request', (packet) => {
   console.log('Зафиксирована UI-форма авторизации. Отправляем пароль...');
   client.write('modal_form_response', {
@@ -95,14 +113,14 @@ client.on('spawn', () => {
 
   tgBot.sendMessage(
     TG_CHAT_ID,
-    `🤖 **Бот ${USERNAME} запущен!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Начало: Y=290\n🚀 Запас ракет: 885 шт\n🛡 Элитр: 4 шт\n🍖 Авто-кормление: Включено (/food)\n📦 Фильтр: Шалкеры (от 1) и Спавнеры (от 5).`,
+    `🤖 **Бот ${USERNAME} вошел на сервер!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
     { parse_mode: 'Markdown' }
   );
 
   startFlyLoop();
 });
 
-// --- 4. АВТО-КОРМЛЕНИЕ ПРИ ГОЛОДЕ ---
+// --- 5. АВТО-КОРМЛЕНИЕ ПРИ ГОЛОДЕ ---
 client.on('set_health', (packet) => {
   if (packet.food !== undefined && packet.food <= 16) {
     const now = Date.now();
@@ -116,12 +134,11 @@ client.on('set_health', (packet) => {
         platform_chat_id: '',
         message: '/food'
       });
-      tgBot.sendMessage(TG_CHAT_ID, `🍖 **Зафиксирован голод** (Сытость: ${packet.food}/20). Отправлена команда \`/food\`.`, { parse_mode: 'Markdown' });
     }
   }
 });
 
-// --- 5. ЦИКЛ ПОЛЁТА И РАСХОДА РЕСУРСОВ ---
+// --- 6. ЦИКЛ ПОЛЁТА ---
 function startFlyLoop() {
   let tickCounter = 0;
 
@@ -185,12 +202,12 @@ function startFlyLoop() {
         delta: { x: 0, y: yWiggle, z: speedRandom }
       });
     } catch (err) {
-      console.error('Ошибка отправки пакета движения:', err.message);
+      console.error('Ошибка отправки движения:', err.message);
     }
   }, 50);
 }
 
-// --- 6. АНАЛИЗ ЧАНКОВ, ПОИСК ШАЛКЕРОВ/СПАВНЕРОВ И СОЗДАНИЕ NBT-ДАМПА ---
+// --- 7. АНАЛИЗ ЧАНКОВ И СКАНИРОВАНИЕ ---
 client.on('level_chunk', async (packet) => {
   let shulkersCount = 0;
   let spawnersCount = 0;
@@ -221,7 +238,6 @@ client.on('level_chunk', async (packet) => {
     const posZ = Math.round(currentPosition.z);
 
     let msg = `🚨 **ЦЕННАЯ НАХОДКА В ЧАНКЕ!**\n`;
-    msg += `👤 **Ник:** ${USERNAME}\n`;
     msg += `📍 **Координаты:** X: ${posX}, Y: ${Math.round(currentPosition.y)}, Z: ${posZ}\n\n`;
 
     if (shulkersCount > 0) msg += `📦 **Шалкеров:** ${shulkersCount}\n`;
@@ -257,7 +273,7 @@ client.on('level_chunk', async (packet) => {
   }
 });
 
-// --- 7. ДИНАМИЧЕСКАЯ ПОСАДКА ---
+// --- 8. ДИНАМИЧЕСКАЯ ПОСАДКА ---
 function safeLandAndDisconnect(reason) {
   const targetSafeY = Math.max(highestGroundY + 2, 67);
 
