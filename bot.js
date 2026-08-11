@@ -7,7 +7,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 
-// --- 1. ПРОВЕРКА ТОКЕНА ---
+// --- 1. ПРОВЕРКА ТОКЕНА ИЗ НАСТРОЕК RENDER ---
 const TG_TOKEN = process.env.TG_TOKEN;
 
 if (!TG_TOKEN) {
@@ -25,12 +25,23 @@ const PASSWORD = 'zona1234';
 
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
+// --- ПОДКЛЮЧЕНИЕ С ЭМУЛЯЦИЕЙ ANDROID (ОБХОД ПРОВЕРКИ ПК) ---
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
   username: USERNAME,
   offline: true,
-  version: '1.21.70'
+  version: '1.21.70',
+  clientData: {
+    DeviceOS: 1,                         // 1 = Android
+    DeviceModel: 'Xiaomi POCO X5 Pro 5G',// Модель популярного смартфона
+    CurrentInputMode: 2,                 // 2 = Сенсорный ввод (Touch)
+    DefaultInputMode: 2,                 // 2 = Сенсорный экран
+    PlatformType: 1,                     // Мобильная платформа
+    GameVersion: '1.21.70',
+    GuiScale: 0,
+    UIProfile: 1                          // 1 = Pocket UI (Мобильный интерфейс)
+  }
 });
 
 let currentPosition = { x: -2420, y: 290, z: -2500 };
@@ -98,7 +109,7 @@ client.on('modal_form_request', (packet) => {
 });
 
 client.on('spawn', () => {
-  console.log(`Бот ${USERNAME} успешно подключен к ${SERVER_HOST}:${SERVER_PORT}`);
+  console.log(`Бот ${USERNAME} успешно подключен с устройства Android!`);
 
   setTimeout(() => {
     client.queue('text', {
@@ -113,7 +124,7 @@ client.on('spawn', () => {
 
   tgBot.sendMessage(
     TG_CHAT_ID,
-    `🤖 **Бот ${USERNAME} вошел на сервер!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
+    `🤖 **Бот ${USERNAME} вошел на сервер!**\n📱 Устройство: POCO X5 Pro 5G (Android)\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
     { parse_mode: 'Markdown' }
   );
 
@@ -138,7 +149,7 @@ client.on('set_health', (packet) => {
   }
 });
 
-// --- 6. ЦИКЛ ПОЛЁТА ---
+// --- 6. ЦИКЛ ПОЛЁТА С СЕНСОРНЫМИ ДАННЫМИ ---
 function startFlyLoop() {
   let tickCounter = 0;
 
@@ -194,7 +205,7 @@ function startFlyLoop() {
         move_vector: { x: 0, z: speedRandom },
         head_yaw: randomYaw,
         input_data: { start_gliding: true },
-        input_mode: 'mouse',
+        input_mode: 'touch',               // Сенсорный ввод
         play_mode: 'normal',
         interaction_model: 'touch',
         gaze_direction: { x: 0, y: 0, z: 0 },
@@ -303,7 +314,7 @@ function safeLandAndDisconnect(reason) {
         move_vector: { x: 0, z: 0.3 },
         head_yaw: 0,
         input_data: {},
-        input_mode: 'mouse',
+        input_mode: 'touch',
         play_mode: 'normal',
         interaction_model: 'touch',
         gaze_direction: { x: 0, y: 0, z: 0 },
@@ -315,3 +326,4 @@ function safeLandAndDisconnect(reason) {
     }
   }, 50);
 }
+
