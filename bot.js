@@ -17,30 +17,30 @@ if (!TG_TOKEN) {
 
 const TG_CHAT_ID = '8070071877';
 
-// --- КОНФИГУРАЦИЯ СЕРВЕРА MINECRAFT ---
+// --- КОНФИГУРАЦИЯ СЕРВЕРА MINECRAFT (ПРЯМОЙ ПОРТ 19135) ---
 const SERVER_HOST = 'phoenix-pe.ru';
-const SERVER_PORT = 19132; // Изменено на 19132
+const SERVER_PORT = 19135;
 const USERNAME = 'RiverSauce1216';
 const PASSWORD = 'zona1234';
 
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
-// --- ПОДКЛЮЧЕНИЕ С ЭМУЛЯЦИЕЙ ANDROID ДЛЯ ОБХОДА БЛОКИРОВОК ПК ---
+// --- МАКСИМАЛЬНАЯ МАСКИРОВКА ПОД ANDROID (ТЕЛЕФОН) ---
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
   username: USERNAME,
   offline: true,
-  version: '1.21.70',
+  version: '1.21.35', // Версия 1.21.35
   clientData: {
-    DeviceOS: 1,                         // 1 = Android
-    DeviceModel: 'Xiaomi POCO X5 Pro 5G',
-    CurrentInputMode: 2,                 // Сенсорный ввод
-    DefaultInputMode: 2,
-    PlatformType: 1,
-    GameVersion: '1.21.70',
+    DeviceOS: 1,                          // 1 = Android (эмуляция мобильного устройства)
+    DeviceModel: 'Samsung Galaxy S23',    // Реалистичная модель телефона
+    CurrentInputMode: 2,                  // 2 = Сенсорный ввод (Touch)
+    DefaultInputMode: 2,                  // Сенсор по умолчанию
+    PlatformType: 1,                      // 1 = Mobile платформа
+    GameVersion: '1.21.35',
     GuiScale: 0,
-    UIProfile: 1
+    UIProfile: 1                          // 1 = Pocket / Mobile UI
   }
 });
 
@@ -99,61 +99,22 @@ client.on('error', (err) => {
   tgBot.sendMessage(TG_CHAT_ID, `⚠️ **Ошибка подключения:** ${err.message}`);
 });
 
-// --- 4. АВТО-ПЕРЕХОД ПО МЕНЮ (НАЖАТИЕ 2x2 И 11 АНАРХИИ) И АВТОРИЗАЦИЯ ---
+// --- 4. АВТОРИЗАЦИЯ ЧЕРЕЗ UI-ФОРМУ ИЛИ КОМАНДУ ---
 client.on('modal_form_request', (packet) => {
   try {
     const formData = JSON.parse(packet.data);
-    console.log('Получена форма:', formData.title || formData.type);
-
-    // 1. Если это форма авторизации / ввода пароля
-    if (formData.type === 'custom_form' || (formData.title && formData.title.toLowerCase().includes('авторизация'))) {
-      console.log('Отправляем пароль...');
-      client.write('modal_form_response', {
-        form_id: packet.form_id,
-        data: JSON.stringify([PASSWORD])
-      });
-      return;
-    }
-
-    // 2. Если это меню с кнопками выборов режимов
-    if (formData.buttons && Array.isArray(formData.buttons)) {
-      // Ищем индекс кнопки "2x2"
-      const btn2x2Index = formData.buttons.findIndex(b => b.text && b.text.includes('2x2'));
-      // Ищем индекс кнопки "11" или "1-1"
-      const btn11Index = formData.buttons.findIndex(b => b.text && (b.text.includes('11') || b.text.includes('1-1')));
-
-      // Шаг 1: Если находимся в главном меню и есть кнопка 2x2, но еще нет кнопки 11
-      if (btn2x2Index !== -1 && btn11Index === -1) {
-        console.log(`Нажимаем категорию "2x2" (кнопка #${btn2x2Index})...`);
-        client.write('modal_form_response', {
-          form_id: packet.form_id,
-          data: JSON.stringify(btn2x2Index)
-        });
-        return;
-      }
-
-      // Шаг 2: Если открылось меню 2x2 и появится кнопка 11 (или 1-1)
-      if (btn11Index !== -1) {
-        console.log(`Нажимаем "Анархия 11" (кнопка #${btn11Index})...`);
-        client.write('modal_form_response', {
-          form_id: packet.form_id,
-          data: JSON.stringify(btn11Index)
-        });
-        return;
-      }
-    }
-  } catch (err) {
-    console.error('Ошибка при обработке формы:', err.message);
-    // Запасной вариант: отправляем пароль
+    console.log('Получена форма авторизации...');
     client.write('modal_form_response', {
       form_id: packet.form_id,
       data: JSON.stringify([PASSWORD])
     });
+  } catch (err) {
+    console.error('Ошибка формы:', err.message);
   }
 });
 
 client.on('spawn', () => {
-  console.log(`Бот ${USERNAME} успешно подключен к ${SERVER_HOST}:${SERVER_PORT}`);
+  console.log(`Бот ${USERNAME} успешно подключен напрямую к порту 19135!`);
 
   setTimeout(() => {
     client.queue('text', {
@@ -168,7 +129,7 @@ client.on('spawn', () => {
 
   tgBot.sendMessage(
     TG_CHAT_ID,
-    `🤖 **Бот ${USERNAME} вошел на Анархию 11!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
+    `🤖 **Бот ${USERNAME} вошел на сервер (Прямое подключение)!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Y=290 | 🚀 Ракет: 885 | 🛡 Элитр: 4`,
     { parse_mode: 'Markdown' }
   );
 
@@ -193,7 +154,7 @@ client.on('set_health', (packet) => {
   }
 });
 
-// --- 6. ЦИКЛ ПОЛЁТА ---
+// --- 6. ЦИКЛ ПОЛЁТА С МОБИЛЬНЫМИ ПАРАМЕТРАМИ ---
 function startFlyLoop() {
   let tickCounter = 0;
 
@@ -237,24 +198,19 @@ function startFlyLoop() {
     const speedRandom = 1.48 + Math.random() * 0.04;
     currentPosition.z += speedRandom;
 
-    const yWiggle = (Math.random() - 0.5) * 0.1;
-    const randomPitch = (Math.random() - 0.5) * 0.3;
-    const randomYaw = (Math.random() - 0.5) * 0.3;
-
     try {
       client.write('player_auth_input', {
-        pitch: randomPitch,
-        yaw: randomYaw,
-        position: { x: currentPosition.x, y: currentPosition.y + yWiggle, z: currentPosition.z },
+        pitch: 0,
+        yaw: 0,
+        position: { x: currentPosition.x, y: currentPosition.y, z: currentPosition.z },
         move_vector: { x: 0, z: speedRandom },
-        head_yaw: randomYaw,
+        head_yaw: 0,
         input_data: { start_gliding: true },
-        input_mode: 'touch',
-        play_mode: 'normal',
-        interaction_model: 'touch',
+        input_mode: 2,         // 2 = Сенсорный ввод (маскировка под телефон)
+        play_mode: 0,          // Обычный игровой режим
+        interaction_model: 0,  // Сенсорное взаимодействие
         gaze_direction: { x: 0, y: 0, z: 0 },
-        tick: 0n,
-        delta: { x: 0, y: yWiggle, z: speedRandom }
+        tick: 0n
       });
     } catch (err) {
       console.error('Ошибка отправки движения:', err.message);
@@ -262,7 +218,7 @@ function startFlyLoop() {
   }, 50);
 }
 
-// --- 7. АНАЛИЗ ЧАНКОВ И СКАНИРОВАНИЕ ---
+// --- 7. АНАЛИЗ ЧАНКОВ И СКАНЕР ---
 client.on('level_chunk', async (packet) => {
   let shulkersCount = 0;
   let spawnersCount = 0;
@@ -358,12 +314,11 @@ function safeLandAndDisconnect(reason) {
         move_vector: { x: 0, z: 0.3 },
         head_yaw: 0,
         input_data: {},
-        input_mode: 'touch',
-        play_mode: 'normal',
-        interaction_model: 'touch',
+        input_mode: 2,
+        play_mode: 0,
+        interaction_model: 0,
         gaze_direction: { x: 0, y: 0, z: 0 },
-        tick: 0n,
-        delta: { x: 0, y: -1.0, z: 0.3 }
+        tick: 0n
       });
     } catch (err) {
       console.error('Ошибка движения при посадке:', err.message);
