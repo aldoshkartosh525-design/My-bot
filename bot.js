@@ -3,18 +3,26 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 
-// --- КОНФИГУРАЦИЯ СЕРВЕРА И ТЕЛЕГРАМ ---
-const TG_TOKEN = process.env.TG_TOKEN || '8857158302:AAFf-hiO0DBRisj3qdmZ5-OPY_JpNBJwMWs';
+// --- 1. ПРОВЕРКА ТОКЕНА ИЗ НАСТРОЕК RENDER ---
+const TG_TOKEN = process.env.TG_TOKEN;
+
+if (!TG_TOKEN) {
+  console.error('❌ ОШИБКА: Переменная TG_TOKEN не найдена в Environment на Render!');
+  process.exit(1);
+}
+
 const TG_CHAT_ID = '8070071877';
 
+// --- КОНФИГУРАЦИЯ СЕРВЕРА MINECRAFT ---
 const SERVER_HOST = 'phoenix-pe.ru';
 const SERVER_PORT = 19135;
 const USERNAME = 'RiverSauce1216';
 const PASSWORD = 'zona1234';
 
-// Полный доступ к командам в Telegram (polling: true)
+// Инициализация Telegram-бота
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
+// Подключение к серверу Bedrock
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
@@ -22,23 +30,23 @@ const client = bedrock.createClient({
   offline: true
 });
 
-// Состояние ресурсов из инвентаря
+// Состояние ресурсов и полёта
 let currentPosition = { x: -2420, y: 290, z: -2500 };
 let totalElytras = 4;                 // 4 элитры с Нерушимостью III
 let currentElytraDurability = 1728;   // Прочность текущей элитры
-let rocketsCount = 885;               // 14 стаков ракет из инвентаря (13x64 + 53)
+let rocketsCount = 885;               // 14 стаков ракет (13x64 + 53)
 let isFlying = true;
 let isBotActive = true;
-let highestGroundY = 65;              // Авто-высота земли
+let highestGroundY = 65;              // Вычисление высоты земли
 let flyInterval = null;
 let lastFoodCommandTime = 0;
 
-// --- УПРАВЛЕНИЕ ЧЕРЕЗ ТЕЛЕГРАМ КОМАНДЫ (/off и /on) ---
+// --- 2. КОМАНДЫ ТЕЛЕГРАМ (/off И /on) ---
 tgBot.on('message', (msg) => {
   const chatId = String(msg.chat.id);
   const text = msg.text ? msg.text.trim() : '';
 
-  if (chatId !== TG_CHAT_ID) return; // Игнорирование чужих сообщений
+  if (chatId !== TG_CHAT_ID) return;
 
   if (text === '/off') {
     if (!isBotActive) {
@@ -48,16 +56,16 @@ tgBot.on('message', (msg) => {
     isBotActive = false;
     isFlying = false;
     if (flyInterval) clearInterval(flyInterval);
-    tgBot.sendMessage(TG_CHAT_ID, '🛑 Получена команда **/off**. Начинаем безопасную посадку и выход...', { parse_mode: 'Markdown' });
+    tgBot.sendMessage(TG_CHAT_ID, '🛑 Получена команда **/off**. Начинаем безопасную посадку...', { parse_mode: 'Markdown' });
     safeLandAndDisconnect('🛑 **Принудительное отключение через Telegram (/off).**');
   }
 
   if (text === '/on') {
-    tgBot.sendMessage(TG_CHAT_ID, `ℹ️ Статус бота: ${isBotActive ? '🟢 Активен и выполняет полет' : '🔴 Отключен'}\n📍 Высота: Y=${Math.round(currentPosition.y)}\n🚀 Ракет: ${rocketsCount} шт.\n🛡 Элитр: ${totalElytras} шт.`);
+    tgBot.sendMessage(TG_CHAT_ID, `ℹ️ **Статус бота:** ${isBotActive ? '🟢 Активен и летит' : '🔴 Отключен'}\n📍 **Высота:** Y=${Math.round(currentPosition.y)}\n🚀 **Ракет:** ${rocketsCount} шт.\n🛡 **Элитр:** ${totalElytras} шт.`, { parse_mode: 'Markdown' });
   }
 });
 
-// --- 1. АВТОРИЗАЦИЯ ЧЕРЕЗ UI-ФОРМУ И ЧАТ ---
+// --- 3. АВТОРИЗАЦИЯ НА СЕРВЕРЕ ---
 client.on('modal_form_request', (packet) => {
   console.log('Зафиксирована UI-форма авторизации. Отправляем пароль...');
   client.write('modal_form_response', {
@@ -82,19 +90,18 @@ client.on('spawn', () => {
 
   tgBot.sendMessage(
     TG_CHAT_ID,
-    `🤖 **Бот ${USERNAME} запущен!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Начало: Y=290\n🚀 Запас ракет: 885 шт (14 стаков)\n🛡 Элитр: 4 шт (Нерушимость III)\n🍖 Авто-кормление: Включено (/food)\n📦 Фильтр: Шалкеры (от 1) и Спавнеры (от 5).`,
+    `🤖 **Бот ${USERNAME} запущен!**\n🌐 Сервер: ${SERVER_HOST}:${SERVER_PORT}\n📍 Начало: Y=290\n🚀 Запас ракет: 885 шт\n🛡 Элитр: 4 шт\n🍖 Авто-кормление: Включено (/food)\n📦 Фильтр: Шалкеры (от 1) и Спавнеры (от 5).`,
     { parse_mode: 'Markdown' }
   );
 
   startFlyLoop();
 });
 
-// --- 2. АВТО-КОРМЛЕНИЕ ПРИ ГОЛОДЕ ---
+// --- 4. АВТО-КОРМЛЕНИЕ ПРИ ГОЛОДЕ ---
 client.on('set_health', (packet) => {
-  // В Bedrock Protocol packet.food отражает шкалу сытости (макс. 20)
   if (packet.food !== undefined && packet.food <= 16) {
     const now = Date.now();
-    if (now - lastFoodCommandTime > 10000) { // Кулдаун 10 сек
+    if (now - lastFoodCommandTime > 10000) {
       lastFoodCommandTime = now;
       client.queue('text', {
         type: 'chat',
@@ -109,7 +116,7 @@ client.on('set_health', (packet) => {
   }
 });
 
-// --- 3. ЦИКЛ ПОЛЁТА С УЧЁТОМ РЕСУРСОВ ---
+// --- 5. ЦИКЛ ПОЛЁТА И РАСХОДА РЕСУРСОВ ---
 function startFlyLoop() {
   let tickCounter = 0;
 
@@ -121,7 +128,6 @@ function startFlyLoop() {
 
     tickCounter++;
 
-    // Расход ресурсов каждые 2.5 сек (50 тиков)
     if (tickCounter % 50 === 0) {
       rocketsCount -= 1;
 
@@ -151,7 +157,6 @@ function startFlyLoop() {
       }
     }
 
-    // Движение вперед с бесшумным шумом для обхода античита
     const speedRandom = 1.48 + Math.random() * 0.04;
     currentPosition.z += speedRandom;
 
@@ -169,7 +174,7 @@ function startFlyLoop() {
   }, 50);
 }
 
-// --- 4. АНАЛИЗ ЧАНКОВ И СБОРА NBT ---
+// --- 6. АНАЛИЗ ЧАНКОВ, ПОИСК ШАЛКЕРОВ/СПАВНЕРОВ И СОЗДАНИЕ NBT- ДАМПА ---
 client.on('level_chunk', async (packet) => {
   let shulkersCount = 0;
   let spawnersCount = 0;
@@ -224,19 +229,19 @@ client.on('level_chunk', async (packet) => {
       fs.writeFileSync(filePath, JSON.stringify(dumpData, null, 2));
 
       await tgBot.sendDocument(TG_CHAT_ID, filePath, {
-        caption: `📋 NBT-дамп найденного чанка [X: ${posX}, Z: ${posZ}]. Отправь этот файл в чат для расшифровки.`
+        caption: `📋 NBT-дамп найденного чанка [X: ${posX}, Z: ${posZ}].`
       });
 
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
     } catch (err) {
-      console.error('Ошибка создания или отправки дампа:', err);
+      console.error('Ошибка создания файла дампа:', err);
     }
   }
 });
 
-// --- 5. ДИНАМИЧЕСКАЯ БЕЗОПАСНАЯ ПОСАДКА ---
+// --- 7. ДИНАМИЧЕСКАЯ ПОСАДКА ---
 function safeLandAndDisconnect(reason) {
   const targetSafeY = Math.max(highestGroundY + 2, 67);
 
@@ -265,5 +270,5 @@ function safeLandAndDisconnect(reason) {
       move_vector: { x: 0, z: 0.3 }
     });
   }, 50);
-    }
+}
 
