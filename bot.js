@@ -3,7 +3,6 @@ http.createServer((req, res) => res.end('Bot is running!')).listen(process.env.P
 
 const bedrock = require('bedrock-protocol');
 const TelegramBot = require('node-telegram-bot-api');
-const fs = require('fs');
 
 const TG_TOKEN = process.env.TG_TOKEN;
 if (!TG_TOKEN) {
@@ -45,13 +44,13 @@ client.on('modal_form_request', (packet) => {
     console.log('--- ПОЛУЧЕНО МЕНЮ ОТ СЕРВЕРА ---');
     console.log(formattedLog);
 
-    // СОХРАНЯЕМ И ОТПРАВЛЯЕМ ПОЛНЫЙ ФАЙЛ С ДАННЫМИ МЕНЮ В TELEGRAM
-    const fileName = `menu_full_${packet.form_id}.txt`;
-    fs.writeFileSync(fileName, formattedLog, 'utf8');
-    tgBot.sendDocument(TG_CHAT_ID, fileName, {
-      caption: `📋 Полные данные меню от сервера (ID: ${packet.form_id})`
-    }).then(() => {
-      fs.unlinkSync(fileName); // Удаляем файл после отправки
+    // ОТПРАВКА ФАЙЛА В ТЕЛЕГРАМ ЧЕРЕЗ БУФЕР (без создания физического файла)
+    const fileBuffer = Buffer.from(formattedLog, 'utf8');
+    tgBot.sendDocument(TG_CHAT_ID, fileBuffer, {
+      caption: `📋 Полные данные меню (ID: ${packet.form_id})`
+    }, {
+      filename: `menu_${packet.form_id}.txt`,
+      contentType: 'text/plain'
     }).catch(err => console.error('Ошибка отправки файла в ТГ:', err.message));
 
     // Если это форма авторизации — вводим пароль
@@ -66,7 +65,6 @@ client.on('modal_form_request', (packet) => {
 
     // Если это список анархий в лобби
     if (formData.buttons && Array.isArray(formData.buttons)) {
-      // Ищем кнопку 11-й анархии по тексту или пути текстуры
       const targetIndex = formData.buttons.findIndex(b => {
         const textMatch = b.text && b.text.includes('11');
         const imageMatch = b.image && b.image.data && b.image.data.endsWith('/11');
@@ -75,13 +73,10 @@ client.on('modal_form_request', (packet) => {
 
       if (targetIndex !== -1) {
         console.log(`✅ Найдена 11-я анархия под индексом: ${targetIndex}. Нажимаем...`);
-        
-        // Отправляем индекс корректно, чтобы сервер не кикал
         client.write('modal_form_response', {
           form_id: packet.form_id,
           data: targetIndex
         });
-        
         tgBot.sendMessage(TG_CHAT_ID, `🚀 Бот успешно выбрал 11-ю анархию (индекс ${targetIndex})!`);
       } else {
         console.log('⚠️ 11-я анархия не найдена по фильтру, нажимаем кнопку 0 по умолчанию');
@@ -106,4 +101,3 @@ client.on('kick', (reason) => {
   tgBot.sendMessage(TG_CHAT_ID, `❌ Бот кикнут: ${JSON.stringify(reason)}`);
   process.exit(1);
 });
-
