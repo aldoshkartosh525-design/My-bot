@@ -128,18 +128,19 @@ function connect() {
       if (!client) return;
       try {
         if (parsedForm.type === 'custom_form' && Array.isArray(parsedForm.content)) {
-          // Динамически подстраиваемся под структуру массива (label -> null, input -> PASSWORD)
           const responseData = parsedForm.content.map(item => {
             if (item.type === 'input') return PASSWORD;
             return null;
           });
 
+          // ИСПРАВЛЕНИЕ: строго передаем has_cancel_data, чтобы ядро сервера не падало
           client.write('modal_form_response', {
             form_id: packet.form_id,
+            has_cancel_data: false,
             data: JSON.stringify(responseData)
           });
           
-          console.log(`[FORM AUTH] Отправлен корректный массив ответа:`, JSON.stringify(responseData));
+          console.log(`[FORM AUTH] Отправлен корректный массив ответа с флагом отмены: false`);
         }
         isAuthenticated = true;
       } catch (err) {
