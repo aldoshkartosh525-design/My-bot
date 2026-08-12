@@ -12,21 +12,40 @@ if (!TG_TOKEN) {
 
 const TG_CHAT_ID = '8070071877';
 const SERVER_HOST = 'phoenix-pe.ru';
-const SERVER_PORT = 19132;
+const SERVER_PORT = 19135; // Прямой порт анки
 const USERNAME = 'RiverSauce1216';
 const PASSWORD = 'zona1234';
 
 const tgBot = new TelegramBot(TG_TOKEN, { polling: true });
 
+// ПОЛНАЯ АППАРАТНАЯ И ТАЧ-ЭМУЛЯЦИЯ ANDROID (SAMSUNG GALAXY S23)
 const client = bedrock.createClient({
   host: SERVER_HOST,
   port: SERVER_PORT,
   username: USERNAME,
   offline: true,
-  version: '1.21.30'
+  version: '1.21.30',
+  clientData: {
+    DeviceOS: 1,                          // 1 = Android
+    DeviceModel: 'Samsung SM-S911B',      // Galaxy S23
+    DeviceModelNumber: 'SM-S911B',
+    CurrentInputMode: 2,                  // 2 = Touch (Сенсор)
+    DefaultInputMode: 2,                  // 2 = Touch
+    PlatformType: 1,                      // Android Platform
+    ClientRandomId: Date.now(),
+    DeviceId: 'c7a4e8d2-1f3b-4a5c-890e-123456789abc',
+    ArmArchitecture: 1,                   // 64-bit ARM
+    GraphicsProvider: 'Adreno (TM) 740',  // Snapdragon 8 Gen 2 GPU
+    MemoryCategory: 4,                    // Flagship RAM
+    MaxViewDistance: 16,
+    GameVersion: '1.21.30',
+    GuiScale: 0,
+    UIProfile: 1,
+    ThirdPartyName: USERNAME
+  }
 });
 
-// ТОЧНАЯ СЕТКА МАРШРУТА (Z = 2450 / -2450)
+// ТОЧНАЯ СЕТКА МАРШРУТА (Z = -2450 ... 2450)
 const routeGrid = [
   { start: { x: -2420, z: -2450 }, end: { x: -2420, z: 2450 } },
   { start: { x: -2260, z: 2450 }, end: { x: -2260, z: -2450 } },
@@ -65,7 +84,6 @@ const routeGrid = [
 let currentSegmentIndex = 0;
 let currentPos = { x: routeGrid[0].start.x, y: 120, z: routeGrid[0].start.z };
 
-let isOnAnarchy = false;
 let rocketCount = 0;
 let hasElytra = false;
 let elytraDurability = 432;
@@ -73,11 +91,32 @@ let elytraDurability = 432;
 let flyInterval = null;
 let lastFoodTime = 0;
 
+// Настройки плавной камеры (сенсорный ввод)
+const TOUCH_SENSITIVITY = 1.2;
+let currentYaw = 0;
+let targetYaw = 0;
+let currentPitch = 0;
+
 const foundStorageBases = new Set();
 const spawnerCounts = new Map();
 const foundSpawnerBases = new Set();
 
-// Подсчет ракет и прочности элитры
+// Функция сглаживания поворота головы с эффектом движения пальцем
+function updateCameraSmoothly() {
+  let diff = targetYaw - currentYaw;
+  while (diff < -180) diff += 360;
+  while (diff > 180) diff -= 360;
+
+  if (Math.abs(diff) > 0.5) {
+    const step = Math.sign(diff) * Math.min(Math.abs(diff), 18 * TOUCH_SENSITIVITY);
+    currentYaw += step;
+    currentPitch = (Math.random() - 0.5) * 0.4; // Микро-дрожание сенсора
+  } else {
+    currentYaw = targetYaw;
+  }
+}
+
+// Учет ракет и прочности элитры
 function updateInventoryStats(items) {
   if (!Array.isArray(items)) return;
 
@@ -113,8 +152,6 @@ client.on('container_set_content', (packet) => updateInventoryStats(packet.items
 
 // Авто-кормёжка (/food)
 client.on('player_attributes', (packet) => {
-  if (!isOnAnarchy) return;
-
   if (packet.attributes && Array.isArray(packet.attributes)) {
     packet.attributes.forEach(attr => {
       if (attr.name === 'minecraft:player.hunger' && attr.current < 14) {
@@ -135,52 +172,25 @@ client.on('player_attributes', (packet) => {
   }
 });
 
-// ТОЧНАЯ ОБРАБОТКА МЕНЮ ЛОББИ И АВТОРИЗАЦИИ
+// Авторизация формами / чатом (если сервер попросит пароль)
 client.on('modal_form_request', (packet) => {
   try {
-    const formId = packet.form_id;
     const formData = JSON.parse(packet.data);
-
-    console.log(`📋 Форма [ID ${formId}]: ${formData.title || 'Без названия'}`);
-
     setTimeout(() => {
-      // 1. Авторизация (Custom Form)
       if (formData.type === 'custom_form' || (formData.title && formData.title.toLowerCase().includes('авторизация'))) {
         client.write('modal_form_response', {
-          form_id: formId,
+          form_id: packet.form_id,
           data: JSON.stringify([PASSWORD])
         });
-        console.log('🔑 Авторизация отправлена.');
-        return;
       }
-
-      // 2. Выбор сервера (Simple Form)
-      if (formData.type === 'form' && Array.isArray(formData.buttons)) {
-        // По файлу формы 11-я кнопка имеет индекс 10 (картинка textures/ui/phoenix/select_server/11)
-        let buttonIndex = formData.buttons.findIndex(b => {
-          const img = (b.image && b.image.data) ? b.image.data : '';
-          return img.endsWith('/11');
-        });
-
-        if (buttonIndex === -1) buttonIndex = 10;
-
-        client.write('modal_form_response', {
-          form_id: formId,
-          data: JSON.stringify(buttonIndex) // Выбор кнопки передается числом в JSON формате
-        });
-
-        console.log(`🚀 Нажата кнопка захода на 11 анархию (индекс: ${buttonIndex}).`);
-      }
-    }, 1500); // 1.5 секунды задержка против античита прокси
+    }, 1200);
   } catch (err) {
     console.error('Ошибка формы:', err.message);
   }
 });
 
-// Сканер баз (Склады и Спавнеры от 5 шт/чанк)
+// Сканер баз (Склады + Спавнеры от 5 шт/чанк)
 client.on('block_actor_data', (packet) => {
-  if (!isOnAnarchy) return;
-
   let blockId = '';
   if (packet.nbt && packet.nbt.value && packet.nbt.value.id) {
     blockId = String(packet.nbt.value.id.value);
@@ -195,52 +205,51 @@ client.on('block_actor_data', (packet) => {
   if (blockId === 'Chest' || blockId === 'TrappedChest' || blockId.includes('ShulkerBox')) {
     if (!foundStorageBases.has(chunkKey)) {
       foundStorageBases.add(chunkKey);
-      tgBot.sendMessage(TG_CHAT_ID, `🚨 **НАЙДЕНА БАЗА (СКЛАД)!**\n📦 Хранилище: ${blockId}\n📍 Координаты: X: ${x}, Y: ${y}, Z: ${z}\n🚀 Ракет: ${rocketCount} шт. | Элитра: ${elytraDurability} HP`);
+      tgBot.sendMessage(TG_CHAT_ID, `🚨 **НАЙДЕНА БАЗА (СКЛАД)!**\n📦 Хранилище: ${blockId}\n📍 Координаты: X: ${x}, Y: ${y}, Z: ${z}\n🚀 Ракет: ${rocketCount} шт. | 🛡️ Элитра: ${elytraDurability} HP`);
     }
   }
 
-  // 2. Спавнеры (от 5 шт)
+  // 2. Спавнеры (от 5 шт на чанк)
   if (blockId === 'MobSpawner' || blockId === 'Spawner') {
     const currentCount = (spawnerCounts.get(chunkKey) || 0) + 1;
     spawnerCounts.set(chunkKey, currentCount);
 
     if (currentCount >= 5 && !foundSpawnerBases.has(chunkKey)) {
       foundSpawnerBases.add(chunkKey);
-      tgBot.sendMessage(TG_CHAT_ID, `🔥 **НАЙДЕНА БАЗА (СПАВНЕРЫ)!**\n💀 Кол-во спавнеров в чанке: ${currentCount} шт.\n📍 Координаты: X: ${x}, Y: ${y}, Z: ${z}\n🚀 Ракет: ${rocketCount} шт. | Элитра: ${elytraDurability} HP`);
+      tgBot.sendMessage(TG_CHAT_ID, `🔥 **НАЙДЕНА БАЗА (СПАВНЕРЫ)!**\n💀 Кол-во спавнеров в чанке: ${currentCount} шт.\n📍 Координаты: X: ${x}, Y: ${y}, Z: ${z}\n🚀 Ракет: ${rocketCount} шт. | 🛡️ Элитра: ${elytraDurability} HP`);
     }
   }
 });
 
-// Отслеживание перехода из лобби непосредственно на анархию
-client.on('change_dimension', () => {
-  console.log('🔄 Смена измерения (переход из Лобби на Анархию)...');
-  startAnarchyMode();
-});
-
+// Точка входа в мир (без лобби)
 client.on('spawn', () => {
-  console.log(`Бот заспавнился в мире.`);
-  // Если сразу появились на анархии в обход смены измерений
+  console.log(`📱 Бот напрямую вошел на телефонную анархию (порт 19135)!`);
+
+  // Отправка пароля в чат на случай, если логин идет через команду
   setTimeout(() => {
-    if (!isOnAnarchy) startAnarchyMode();
-  }, 4000);
+    client.write('text', {
+      type: 'chat',
+      needs_translation: false,
+      source_name: client.username,
+      xuid: '',
+      platform_chat_id: '',
+      message: `/login ${PASSWORD}`
+    });
+  }, 1000);
+
+  setTimeout(() => {
+    tgBot.sendMessage(TG_CHAT_ID, `✅ Бот успешно подключен напрямую к телефонной анархии (19135)!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Нет'}\n🚀 Ракет: ${rocketCount} шт.\n📐 Запуск полёта по сетке.`);
+    startFlightLoop();
+  }, 3000);
 });
 
-function startAnarchyMode() {
-  if (isOnAnarchy) return;
-  isOnAnarchy = true;
-
-  tgBot.sendMessage(TG_CHAT_ID, `✅ Успешный вход на 11 анархию!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Нет'}\n🚀 Ракет: ${rocketCount} шт.\n📐 Старт полёта по сетке (32 пролёта).`);
-  startFlightLoop();
-}
-
+// Полёт strictly с эмуляцией мобильных пакетов движения
 function startFlightLoop() {
   if (flyInterval) clearInterval(flyInterval);
 
   let stepCount = 0;
 
   flyInterval = setInterval(() => {
-    if (!isOnAnarchy) return;
-
     if (rocketCount <= 0) {
       tgBot.sendMessage(TG_CHAT_ID, `⚠️ **ПОЛЕТ ОСТАНОВЛЕН!** Закончились ракеты.\n📍 Координаты: X: ${Math.round(currentPos.x)}, Y: 120, Z: ${Math.round(currentPos.z)}`);
       clearInterval(flyInterval);
@@ -254,15 +263,16 @@ function startFlightLoop() {
     }
 
     const currentSegment = routeGrid[currentSegmentIndex];
-    
     if (!currentSegment) {
-      tgBot.sendMessage(TG_CHAT_ID, `🏁 **ПОЛНЫЙ ОБЛЕТ ЗАВЕРШЕН!** Пройдены все 32 линии.`);
+      tgBot.sendMessage(TG_CHAT_ID, `🏁 **КАРТА ПОЛНОСТЬЮ ОБЛЕТЕНА!** Все 32 пролёта завершены.`);
       clearInterval(flyInterval);
       return;
     }
 
     currentPos.x = currentSegment.start.x;
     const zDir = currentSegment.end.z > currentSegment.start.z ? 1 : -1;
+    targetYaw = zDir === 1 ? 0 : 180;
+
     currentPos.z += 5 * zDir;
     stepCount += 5;
 
@@ -273,20 +283,24 @@ function startFlightLoop() {
       if (routeGrid[currentSegmentIndex]) {
         currentPos.x = routeGrid[currentSegmentIndex].start.x;
         currentPos.z = routeGrid[currentSegmentIndex].start.z;
-        tgBot.sendMessage(TG_CHAT_ID, `📌 Пролёт №${currentSegmentIndex + 1}/32. Линия X: ${currentPos.x}, Z: ${currentPos.z}`);
+        tgBot.sendMessage(TG_CHAT_ID, `📌 Переход на пролёт №${currentSegmentIndex + 1}/32. Линия X: ${currentPos.x}, Z: ${currentPos.z}`);
       }
     }
 
+    // Обновляем плавно угол взгляда под сенсор
+    updateCameraSmoothly();
+
+    // Отправка пакета с флагами сенсорного ввода Touch
     client.write('player_auth_input', {
-      pitch: 0,
-      yaw: zDir === 1 ? 0 : 180,
+      pitch: currentPitch,
+      yaw: currentYaw,
       position: { x: currentPos.x, y: 120, z: currentPos.z },
       move_vector: { x: 0, z: 1 },
-      head_yaw: 0,
-      input_data: 0,
-      input_mode: 'normal',
+      head_yaw: currentYaw,
+      input_data: 0n,
+      input_mode: 'touch',
       play_mode: 'normal',
-      interaction_mode: 'normal'
+      interaction_mode: 'touch'
     });
 
     if (stepCount % 500 === 0) {
