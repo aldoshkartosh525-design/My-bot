@@ -116,6 +116,7 @@ function connect() {
   });
 
   client.on('modal_form_request', (packet) => {
+    console.log(`[FORM RECEIVED] ID: ${packet.form_id}, Raw Data: ${packet.data}`);
     let parsedForm = {};
     try {
       parsedForm = JSON.parse(packet.data);
@@ -123,25 +124,24 @@ function connect() {
       return;
     }
 
-    if (parsedForm.type === 'custom_form' && Array.isArray(parsedForm.content)) {
-      console.log(`[FORM AUTH] Заполнение пароля...`);
-      // Передаём null для всех полей, кроме input
-      const responseData = parsedForm.content.map(item => item.type === 'input' ? PASSWORD : null);
+    setTimeout(() => {
+      if (!client) return;
+      try {
+        if (parsedForm.type === 'custom_form') {
+          // Отправляем массив с введенным паролем для единственного поля ввода
+          const responseData = [PASSWORD];
 
-      setTimeout(() => {
-        if (!client) return;
-        try {
           client.write('modal_form_response', {
             form_id: packet.form_id,
             data: JSON.stringify(responseData)
           });
-          isAuthenticated = true;
-          console.log(`[FORM AUTH] Пароль отправлен!`);
-        } catch (err) {
-          console.error('[FORM ERROR]', err.message);
+          console.log(`[FORM AUTH] Пароль ${PASSWORD} успешно отправлен в форме!`);
         }
-      }, 500);
-    }
+        isAuthenticated = true;
+      } catch (err) {
+        console.error('[FORM ERROR]', err.message);
+      }
+    }, 500);
   });
 
   client.on('text', (packet) => {
@@ -303,4 +303,3 @@ function startFlightLoop() {
 }
 
 connect();
-
