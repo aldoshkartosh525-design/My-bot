@@ -128,22 +128,40 @@ function connect() {
       if (!client) return;
       try {
         if (parsedForm.type === 'custom_form' && Array.isArray(parsedForm.content)) {
-          // ИСПРАВЛЕНИЕ: Отправляем пустые строки `""` вместо `null`, 
-          // чтобы плагин на сервере не падал с ошибкой обработки пакета.
+          
+          // ДИНАМИЧЕСКИЙ ОТВЕТ: Идеально подстраиваемся под форму сервера
           const responseData = parsedForm.content.map(item => {
             if (item.type === 'input') return PASSWORD;
-            if (item.type === 'label') return "";
-            return "";
+            if (item.type === 'label') return null; // PocketMine требует null для текста
+            if (item.type === 'toggle') return false;
+            if (item.type === 'dropdown' || item.type === 'slider' || item.type === 'step_slider') return 0;
+            return null;
           });
 
           client.write('modal_form_response', {
             form_id: packet.form_id,
+            has_cancel_reason: false,
             data: JSON.stringify(responseData)
           });
           
-          console.log(`[FORM AUTH] Отправлен массив ответа (без null):`, JSON.stringify(responseData));
+          console.log(`[FORM AUTH] Отправлен динамический ответ:`, JSON.stringify(responseData));
+          isAuthenticated = true;
+
+          // РЕЗЕРВ: Отправляем команду в чат через секунду (на случай, если форма не сработает)
+          setTimeout(() => {
+            if (client) {
+              client.write('text', {
+                type: 'chat',
+                needs_translation: false,
+                source_name: client.username,
+                xuid: '',
+                platform_chat_id: '',
+                message: `/login ${PASSWORD}`
+              });
+              console.log(`[AUTH FALLBACK] Отправлена команда /login`);
+            }
+          }, 1000);
         }
-        isAuthenticated = true;
       } catch (err) {
         console.error('[FORM ERROR]', err.message);
       }
@@ -309,3 +327,5 @@ function startFlightLoop() {
 }
 
 connect();
+
+
