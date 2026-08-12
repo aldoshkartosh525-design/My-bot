@@ -115,57 +115,9 @@ function connect() {
     }
   });
 
+  // Логируем форму, но не отправляем поврежденный ответ, чтобы сервер не кикал
   client.on('modal_form_request', (packet) => {
-    console.log(`[FORM RECEIVED] ID: ${packet.form_id}, Raw Data: ${packet.data}`);
-    let parsedForm = {};
-    try {
-      parsedForm = JSON.parse(packet.data);
-    } catch (e) {
-      return;
-    }
-
-    setTimeout(() => {
-      if (!client) return;
-      try {
-        if (parsedForm.type === 'custom_form' && Array.isArray(parsedForm.content)) {
-          
-          // ДИНАМИЧЕСКИЙ ОТВЕТ: Идеально подстраиваемся под форму сервера
-          const responseData = parsedForm.content.map(item => {
-            if (item.type === 'input') return PASSWORD;
-            if (item.type === 'label') return null; // PocketMine требует null для текста
-            if (item.type === 'toggle') return false;
-            if (item.type === 'dropdown' || item.type === 'slider' || item.type === 'step_slider') return 0;
-            return null;
-          });
-
-          client.write('modal_form_response', {
-            form_id: packet.form_id,
-            has_cancel_reason: false,
-            data: JSON.stringify(responseData)
-          });
-          
-          console.log(`[FORM AUTH] Отправлен динамический ответ:`, JSON.stringify(responseData));
-          isAuthenticated = true;
-
-          // РЕЗЕРВ: Отправляем команду в чат через секунду (на случай, если форма не сработает)
-          setTimeout(() => {
-            if (client) {
-              client.write('text', {
-                type: 'chat',
-                needs_translation: false,
-                source_name: client.username,
-                xuid: '',
-                platform_chat_id: '',
-                message: `/login ${PASSWORD}`
-              });
-              console.log(`[AUTH FALLBACK] Отправлена команда /login`);
-            }
-          }, 1000);
-        }
-      } catch (err) {
-        console.error('[FORM ERROR]', err.message);
-      }
-    }, 500);
+    console.log(`[FORM IGNORED] Получена форма ID: ${packet.form_id}, переходим на авторизацию через чат.`);
   });
 
   client.on('text', (packet) => {
@@ -201,6 +153,21 @@ function connect() {
     if (isFlying) return;
     isFlying = true;
     console.log(`[ONLINE] Успешный вход на сервер`);
+
+    // Авторизуемся через чат сразу после входа
+    setTimeout(() => {
+      if (client) {
+        client.write('text', {
+          type: 'chat',
+          needs_translation: false,
+          source_name: client.username,
+          xuid: '',
+          platform_chat_id: '',
+          message: `/login ${PASSWORD}`
+        });
+        console.log(`[AUTH] Отправлена команда /login через чат`);
+      }
+    }, 1500);
 
     setTimeout(() => {
       tgBot.sendMessage(TG_CHAT_ID, `✅ Бот в сети на **${TARGET_SERVER.name}**!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Обнаружена'}\n🚀 Ракет: ${rocketCount} шт.`);
@@ -327,5 +294,4 @@ function startFlightLoop() {
 }
 
 connect();
-
 
