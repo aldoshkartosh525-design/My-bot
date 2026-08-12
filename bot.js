@@ -2,7 +2,6 @@ const http = require('http');
 const bedrock = require('bedrock-protocol');
 const TelegramBot = require('node-telegram-bot-api');
 
-// HTTP-сервер для поддержания работы на Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -11,13 +10,8 @@ http.createServer((req, res) => {
   console.log(`[HTTP] Сервер запущен на порту ${PORT}`);
 });
 
-// Защита от падения процесса Node.js
-process.on('uncaughtException', (err) => {
-  console.error('[UNCAUGHT EXCEPTION]', err.stack || err.message);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('[UNHANDLED REJECTION]', reason);
-});
+process.on('uncaughtException', (err) => console.error('[UNCAUGHT EXCEPTION]', err.message));
+process.on('unhandledRejection', (reason) => console.error('[UNHANDLED REJECTION]', reason));
 
 const TG_TOKEN = process.env.TG_TOKEN || '8699310111:AAFrTIY5EMBc39t8B00ASKpHEjxJcW9iBpI';
 const TG_CHAT_ID = process.env.TG_CHAT_ID || '8070071877';
@@ -34,7 +28,9 @@ const tgBot = new TelegramBot(TG_TOKEN, { polling: false });
 
 let client = null;
 let flyInterval = null;
+let reconnectTimer = null;
 let isAuthenticated = false;
+let isConnecting = false;
 let currentTick = 0n;
 
 let rocketCount = 0;
@@ -85,9 +81,13 @@ const spawnerCounts = new Map();
 const foundSpawnerBases = new Set();
 
 function connect() {
-  console.log(`[CONNECTING] Подключение к ${TARGET_SERVER.name}...`);
+  if (isConnecting) return;
+  isConnecting = true;
+
   if (flyInterval) clearInterval(flyInterval);
   isFlying = false;
+
+  console.log(`[CONNECTING] Подключение к ${TARGET_SERVER.name}...`);
 
   client = bedrock.createClient({
     host: TARGET_SERVER.host,
@@ -115,11 +115,8 @@ function connect() {
     }
   });
 
-  // Авторизация через форму с небольшим тайм-аутом
   client.on('modal_form_request', (packet) => {
-    const formId = packet.form_id;
     let parsedForm = {};
-
     try {
       parsedForm = JSON.parse(packet.data);
     } catch (e) {
@@ -127,28 +124,22 @@ function connect() {
     }
 
     if (parsedForm.type === 'custom_form' && Array.isArray(parsedForm.content)) {
-      console.log(`[FORM AUTH] Форма ${formId} получена. Заполнение пароля через 300мс...`);
-
-      const responseData = parsedForm.content.map(item => {
-        if (item.type === 'input') {
-          return PASSWORD;
-        }
-        return ""; // Для надписей передаём пустую строку вместо null
-      });
+      console.log(`[FORM AUTH] Заполнение пароля...`);
+      const responseData = parsedForm.content.map(item => item.type === 'input' ? PASSWORD : "");
 
       setTimeout(() => {
         if (!client) return;
         try {
           client.write('modal_form_response', {
-            form_id: formId,
+            form_id: packet.form_id,
             data: JSON.stringify(responseData)
           });
           isAuthenticated = true;
-          console.log(`[FORM AUTH] Пароль '${PASSWORD}' отправлен!`);
+          console.log(`[FORM AUTH] Пароль отправлен!`);
         } catch (err) {
-          console.error('[FORM RESPONSE ERROR]', err.message);
+          console.error('[FORM ERROR]', err.message);
         }
-      }, 300);
+      }, 500);
     }
   });
 
@@ -162,7 +153,6 @@ function connect() {
   client.on('inventory_content', (packet) => updateInventoryStats(packet.items));
   client.on('inventory_slot', (packet) => updateInventoryStats([packet.item]));
 
-  // Сканирование спавнеров: строго от 5 штук в 1 чанке
   client.on('block_actor_data', (packet) => {
     let blockId = '';
     if (packet.nbt && packet.nbt.value && packet.nbt.value.id) {
@@ -182,14 +172,15 @@ function connect() {
   });
 
   client.on('spawn', () => {
+    isConnecting = false;
     if (isFlying) return;
     isFlying = true;
-    console.log(`[ONLINE] Зашли на ${TARGET_SERVER.name}`);
+    console.log(`[ONLINE] Успешный вход на сервер`);
 
     setTimeout(() => {
-      tgBot.sendMessage(TG_CHAT_ID, `✅ Бот в сети и авторизован на **${TARGET_SERVER.name}**!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Обнаружена'}\n🚀 Ракет: ${rocketCount} шт.`);
+      tgBot.sendMessage(TG_CHAT_ID, `✅ Бот в сети на **${TARGET_SERVER.name}**!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Обнаружена'}\n🚀 Ракет: ${rocketCount} шт.`);
       startFlightLoop();
-    }, 4000);
+    }, 3000);
   });
 
   client.on('kick', (reason) => {
@@ -204,9 +195,16 @@ function connect() {
 function reconnect() {
   if (flyInterval) clearInterval(flyInterval);
   isFlying = false;
+  isConnecting = false;
 
+  if (client) {
+    try { client.close(); } catch (e) {}
+    client = null;
+  }
+
+  if (reconnectTimer) clearTimeout(reconnectTimer);
   console.log('[RECONNECT] Переподключение через 10 секунд...');
-  setTimeout(() => connect(), 10000);
+  reconnectTimer = setTimeout(() => connect(), 10000);
 }
 
 function updateInventoryStats(items) {
@@ -292,7 +290,10 @@ function startFlightLoop() {
         input_mode: 'touch',
         play_mode: 'normal',
         interaction_mode: 'touch',
-        tick: currentTick
+        tick: currentTick,
+        delta: { x: 0, y: 0, z: 0 },
+        analogue_move_vector: { x: 0, z: 0 },
+        camera_orientation: { x: 0, y: 0, z: 0 }
       });
     } catch (e) {
       console.error('[AUTH INPUT ERROR]', e.message);
@@ -301,3 +302,4 @@ function startFlightLoop() {
 }
 
 connect();
+
