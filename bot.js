@@ -26,7 +26,7 @@ const client = bedrock.createClient({
   version: '1.21.30'
 });
 
-// ТОЧНАЯ СЕТКА МАРШРУТА
+// ТОЧНАЯ СЕТКА МАРШРУТА (Z = 2450 / -2450)
 const routeGrid = [
   { start: { x: -2420, z: -2450 }, end: { x: -2420, z: 2450 } },
   { start: { x: -2260, z: 2450 }, end: { x: -2260, z: -2450 } },
@@ -77,7 +77,7 @@ const foundStorageBases = new Set();
 const spawnerCounts = new Map();
 const foundSpawnerBases = new Set();
 
-// Подсчет ракет и элитры
+// Подсчет ракет и прочности элитры
 function updateInventoryStats(items) {
   if (!Array.isArray(items)) return;
 
@@ -135,32 +135,49 @@ client.on('player_attributes', (packet) => {
   }
 });
 
-// Авторизация и вход на 11-ю анархию
+// ТОЧНАЯ ОБРАБОТКА МЕНЮ ЛОББИ И АВТОРИЗАЦИИ
 client.on('modal_form_request', (packet) => {
   try {
+    const formId = packet.form_id;
     const formData = JSON.parse(packet.data);
 
+    console.log(`📋 Форма [ID ${formId}]: ${formData.title || 'Без названия'}`);
+
     setTimeout(() => {
+      // 1. Авторизация (Custom Form)
       if (formData.type === 'custom_form' || (formData.title && formData.title.toLowerCase().includes('авторизация'))) {
-        client.write('modal_form_response', { form_id: packet.form_id, data: JSON.stringify([PASSWORD]) });
+        client.write('modal_form_response', {
+          form_id: formId,
+          data: JSON.stringify([PASSWORD])
+        });
+        console.log('🔑 Авторизация отправлена.');
         return;
       }
 
-      if (formData.buttons && Array.isArray(formData.buttons)) {
-        const targetIndex = formData.buttons.findIndex(b => {
-          return (b.text && b.text.includes('11')) || (b.image && b.image.data && b.image.data.endsWith('/11'));
+      // 2. Выбор сервера (Simple Form)
+      if (formData.type === 'form' && Array.isArray(formData.buttons)) {
+        // По файлу формы 11-я кнопка имеет индекс 10 (картинка textures/ui/phoenix/select_server/11)
+        let buttonIndex = formData.buttons.findIndex(b => {
+          const img = (b.image && b.image.data) ? b.image.data : '';
+          return img.endsWith('/11');
         });
 
-        const selectedIndex = targetIndex !== -1 ? targetIndex : 10;
-        client.write('modal_form_response', { form_id: packet.form_id, data: selectedIndex });
+        if (buttonIndex === -1) buttonIndex = 10;
+
+        client.write('modal_form_response', {
+          form_id: formId,
+          data: JSON.stringify(buttonIndex) // Выбор кнопки передается числом в JSON формате
+        });
+
+        console.log(`🚀 Нажата кнопка захода на 11 анархию (индекс: ${buttonIndex}).`);
       }
-    }, 800);
+    }, 1500); // 1.5 секунды задержка против античита прокси
   } catch (err) {
     console.error('Ошибка формы:', err.message);
   }
 });
 
-// Детект баз (Склады и Спавнеры от 5 шт/чанк)
+// Сканер баз (Склады и Спавнеры от 5 шт/чанк)
 client.on('block_actor_data', (packet) => {
   if (!isOnAnarchy) return;
 
@@ -182,7 +199,7 @@ client.on('block_actor_data', (packet) => {
     }
   }
 
-  // 2. Спавнеры
+  // 2. Спавнеры (от 5 шт)
   if (blockId === 'MobSpawner' || blockId === 'Spawner') {
     const currentCount = (spawnerCounts.get(chunkKey) || 0) + 1;
     spawnerCounts.set(chunkKey, currentCount);
@@ -194,17 +211,28 @@ client.on('block_actor_data', (packet) => {
   }
 });
 
-client.on('spawn', () => {
-  console.log(`Бот вошел в мир!`);
-  
-  setTimeout(() => {
-    isOnAnarchy = true;
-    tgBot.sendMessage(TG_CHAT_ID, `✅ Бот на 11 анархии!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Нет'}\n🚀 Ракет: ${rocketCount} шт.\n📐 Запуск полёта по вашей сетке из 32 пролётов.`);
-    startFlightLoop();
-  }, 3000);
+// Отслеживание перехода из лобби непосредственно на анархию
+client.on('change_dimension', () => {
+  console.log('🔄 Смена измерения (переход из Лобби на Анархию)...');
+  startAnarchyMode();
 });
 
-// Полёт strictly по вашей сетке
+client.on('spawn', () => {
+  console.log(`Бот заспавнился в мире.`);
+  // Если сразу появились на анархии в обход смены измерений
+  setTimeout(() => {
+    if (!isOnAnarchy) startAnarchyMode();
+  }, 4000);
+});
+
+function startAnarchyMode() {
+  if (isOnAnarchy) return;
+  isOnAnarchy = true;
+
+  tgBot.sendMessage(TG_CHAT_ID, `✅ Успешный вход на 11 анархию!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Нет'}\n🚀 Ракет: ${rocketCount} шт.\n📐 Старт полёта по сетке (32 пролёта).`);
+  startFlightLoop();
+}
+
 function startFlightLoop() {
   if (flyInterval) clearInterval(flyInterval);
 
@@ -213,7 +241,6 @@ function startFlightLoop() {
   flyInterval = setInterval(() => {
     if (!isOnAnarchy) return;
 
-    // ПРОВЕРКА РАКЕТ И ЭЛИТРЫ
     if (rocketCount <= 0) {
       tgBot.sendMessage(TG_CHAT_ID, `⚠️ **ПОЛЕТ ОСТАНОВЛЕН!** Закончились ракеты.\n📍 Координаты: X: ${Math.round(currentPos.x)}, Y: 120, Z: ${Math.round(currentPos.z)}`);
       clearInterval(flyInterval);
@@ -228,20 +255,17 @@ function startFlightLoop() {
 
     const currentSegment = routeGrid[currentSegmentIndex];
     
-    // Если прошли всю сетку
     if (!currentSegment) {
-      tgBot.sendMessage(TG_CHAT_ID, `🏁 **КАРТА ПОЛНОСТЬЮ ОБЛЕТЕНА!** Все 32 пролёта завершены.`);
+      tgBot.sendMessage(TG_CHAT_ID, `🏁 **ПОЛНЫЙ ОБЛЕТ ЗАВЕРШЕН!** Пройдены все 32 линии.`);
       clearInterval(flyInterval);
       return;
     }
 
-    // Движение по Z
     currentPos.x = currentSegment.start.x;
     const zDir = currentSegment.end.z > currentSegment.start.z ? 1 : -1;
     currentPos.z += 5 * zDir;
     stepCount += 5;
 
-    // Проверка завершения текущей линии
     const reachedEnd = zDir === 1 ? currentPos.z >= currentSegment.end.z : currentPos.z <= currentSegment.end.z;
 
     if (reachedEnd) {
@@ -249,11 +273,10 @@ function startFlightLoop() {
       if (routeGrid[currentSegmentIndex]) {
         currentPos.x = routeGrid[currentSegmentIndex].start.x;
         currentPos.z = routeGrid[currentSegmentIndex].start.z;
-        tgBot.sendMessage(TG_CHAT_ID, `📌 Переход на пролёт №${currentSegmentIndex + 1}/32. Линия X: ${currentPos.x}, Z: ${currentPos.z}`);
+        tgBot.sendMessage(TG_CHAT_ID, `📌 Пролёт №${currentSegmentIndex + 1}/32. Линия X: ${currentPos.x}, Z: ${currentPos.z}`);
       }
     }
 
-    // Отправка движения серверу
     client.write('player_auth_input', {
       pitch: 0,
       yaw: zDir === 1 ? 0 : 180,
@@ -266,7 +289,6 @@ function startFlightLoop() {
       interaction_mode: 'normal'
     });
 
-    // Отчет каждые 500 блоков
     if (stepCount % 500 === 0) {
       tgBot.sendMessage(TG_CHAT_ID, `✈️ Пролёт №${currentSegmentIndex + 1}/32\n📍 Координаты: X: ${Math.round(currentPos.x)}, Y: 120, Z: ${Math.round(currentPos.z)}\n🚀 Ракет: ${rocketCount} шт. | 🛡️ Элитра: ${elytraDurability} HP`);
     }
@@ -279,3 +301,5 @@ client.on('kick', (reason) => {
   tgBot.sendMessage(TG_CHAT_ID, `❌ Бот кикнут: ${JSON.stringify(reason)}`);
   process.exit(1);
 });
+
+
