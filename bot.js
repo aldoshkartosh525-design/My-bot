@@ -2,12 +2,21 @@ const http = require('http');
 const bedrock = require('bedrock-protocol');
 const TelegramBot = require('node-telegram-bot-api');
 
+// HTTP-сервер для поддержания работы на Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('Phoenix-PE Bot is active.');
 }).listen(PORT, () => {
   console.log(`[HTTP] Сервер запущен на порту ${PORT}`);
+});
+
+// Защита от падения процесса Node.js
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err.stack || err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION]', reason);
 });
 
 const TG_TOKEN = process.env.TG_TOKEN || '8699310111:AAFrTIY5EMBc39t8B00ASKpHEjxJcW9iBpI';
@@ -26,6 +35,7 @@ const tgBot = new TelegramBot(TG_TOKEN, { polling: false });
 let client = null;
 let flyInterval = null;
 let isAuthenticated = false;
+let currentTick = 0n;
 
 let rocketCount = 0;
 let hasElytra = false;
@@ -105,9 +115,7 @@ function connect() {
     }
   });
 
-  // ==========================================
-  // АВТО-ОТВЕТ НА ФОРМУ АВТОРИЗАЦИИ
-  // ==========================================
+  // Авторизация через форму с небольшим тайм-аутом
   client.on('modal_form_request', (packet) => {
     const formId = packet.form_id;
     let parsedForm = {};
@@ -115,31 +123,32 @@ function connect() {
     try {
       parsedForm = JSON.parse(packet.data);
     } catch (e) {
-      console.error('[FORM ERROR]', e.message);
       return;
     }
 
-    // Проверяем, что это custom_form с полем ввода
     if (parsedForm.type === 'custom_form' && Array.isArray(parsedForm.content)) {
-      console.log(`[FORM AUTH] Обнаружена форма входа (ID: ${formId}). Заполняем пароль...`);
+      console.log(`[FORM AUTH] Форма ${formId} получена. Заполнение пароля через 300мс...`);
 
-      // Формируем массив ответов: подставляем PASSWORD в элемент типа 'input'
       const responseData = parsedForm.content.map(item => {
         if (item.type === 'input') {
           return PASSWORD;
         }
-        return null;
+        return ""; // Для надписей передаём пустую строку вместо null
       });
 
-      // Отправляем пакет ответа на форму
-      client.write('modal_form_response', {
-        form_id: formId,
-        data: JSON.stringify(responseData)
-      });
-
-      isAuthenticated = true;
-      console.log(`[FORM AUTH] Пароль '${PASSWORD}' отправлен!`);
-      tgBot.sendMessage(TG_CHAT_ID, `🔑 **Успешно заполнена форма входа!**\nПароль отправлен на сервер.`);
+      setTimeout(() => {
+        if (!client) return;
+        try {
+          client.write('modal_form_response', {
+            form_id: formId,
+            data: JSON.stringify(responseData)
+          });
+          isAuthenticated = true;
+          console.log(`[FORM AUTH] Пароль '${PASSWORD}' отправлен!`);
+        } catch (err) {
+          console.error('[FORM RESPONSE ERROR]', err.message);
+        }
+      }, 300);
     }
   });
 
@@ -153,7 +162,7 @@ function connect() {
   client.on('inventory_content', (packet) => updateInventoryStats(packet.items));
   client.on('inventory_slot', (packet) => updateInventoryStats([packet.item]));
 
-  // Поиск баз: строго от 5 спавнеров в 1 чанке
+  // Сканирование спавнеров: строго от 5 штук в 1 чанке
   client.on('block_actor_data', (packet) => {
     let blockId = '';
     if (packet.nbt && packet.nbt.value && packet.nbt.value.id) {
@@ -175,11 +184,10 @@ function connect() {
   client.on('spawn', () => {
     if (isFlying) return;
     isFlying = true;
-
     console.log(`[ONLINE] Зашли на ${TARGET_SERVER.name}`);
 
     setTimeout(() => {
-      tgBot.sendMessage(TG_CHAT_ID, `✅ Бот в сети и прошёл авторизацию на **${TARGET_SERVER.name}**!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Обнаружена'}\n🚀 Ракет: ${rocketCount} шт.`);
+      tgBot.sendMessage(TG_CHAT_ID, `✅ Бот в сети и авторизован на **${TARGET_SERVER.name}**!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Обнаружена'}\n🚀 Ракет: ${rocketCount} шт.`);
       startFlightLoop();
     }, 4000);
   });
@@ -236,6 +244,11 @@ function startFlightLoop() {
   let stepCount = 0;
 
   flyInterval = setInterval(() => {
+    if (!client || !isFlying) {
+      clearInterval(flyInterval);
+      return;
+    }
+
     if (rocketCount <= 0 && stepCount > 100) {
       tgBot.sendMessage(TG_CHAT_ID, `⚠️ **ПОЛЕТ ОСТАНОВЛЕН!** Нет ракет.`);
       clearInterval(flyInterval);
@@ -266,19 +279,25 @@ function startFlightLoop() {
       }
     }
 
-    client.write('player_auth_input', {
-      pitch: 0,
-      yaw: targetYaw,
-      position: { x: currentPos.x, y: 120, z: currentPos.z },
-      move_vector: { x: 0, z: 1 },
-      head_yaw: targetYaw,
-      input_data: 0n,
-      input_mode: 'touch',
-      play_mode: 'normal',
-      interaction_mode: 'touch'
-    });
+    currentTick += 1n;
+
+    try {
+      client.write('player_auth_input', {
+        pitch: 0,
+        yaw: targetYaw,
+        position: { x: currentPos.x, y: 120, z: currentPos.z },
+        move_vector: { x: 0, z: 1 },
+        head_yaw: targetYaw,
+        input_data: 0n,
+        input_mode: 'touch',
+        play_mode: 'normal',
+        interaction_mode: 'touch',
+        tick: currentTick
+      });
+    } catch (e) {
+      console.error('[AUTH INPUT ERROR]', e.message);
+    }
   }, 200);
 }
 
 connect();
-
