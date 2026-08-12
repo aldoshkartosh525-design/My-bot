@@ -125,7 +125,8 @@ function connect() {
 
     if (parsedForm.type === 'custom_form' && Array.isArray(parsedForm.content)) {
       console.log(`[FORM AUTH] Заполнение пароля...`);
-      const responseData = parsedForm.content.map(item => item.type === 'input' ? PASSWORD : "");
+      // Передаём null для всех полей, кроме input
+      const responseData = parsedForm.content.map(item => item.type === 'input' ? PASSWORD : null);
 
       setTimeout(() => {
         if (!client) return;
