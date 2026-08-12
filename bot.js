@@ -2,7 +2,6 @@ const http = require('http');
 const bedrock = require('bedrock-protocol');
 const TelegramBot = require('node-telegram-bot-api');
 
-// HTTP-сервер для поддержки активности 24/7
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -11,10 +10,11 @@ http.createServer((req, res) => {
   console.log(`[HTTP Server] Listening on port ${PORT}`);
 });
 
-// Настройки
+// НАСТРОЙКИ
 const TG_TOKEN = process.env.TG_TOKEN || '8699310111:AAFrTIY5EMBc39t8B00ASKpHEjxJcW9iBpI';
 const TG_CHAT_ID = process.env.TG_CHAT_ID || '8070071877';
 const USERNAME = process.env.USERNAME || 'RiverSauce1216';
+const PASSWORD = process.env.PASSWORD || 'zona1234';
 
 // 11 Сервер (2x2 для всех)
 const TARGET_SERVER = {
@@ -53,7 +53,6 @@ const client = bedrock.createClient({
   }
 });
 
-// Сетка полета (2.5k x 2.5k)
 const routeGrid = [
   { start: { x: -2420, z: -2450 }, end: { x: -2420, z: 2450 } },
   { start: { x: -2260, z: 2450 }, end: { x: -2260, z: -2450 } },
@@ -108,6 +107,26 @@ const foundStorageBases = new Set();
 const spawnerCounts = new Map();
 const foundSpawnerBases = new Set();
 
+// Вспомогательная функция отправки команд в чат
+function sendChatMessage(msg) {
+  client.write('text', {
+    type: 'chat',
+    needs_translation: false,
+    source_name: client.username,
+    xuid: '',
+    platform_chat_id: '',
+    message: msg
+  });
+}
+
+// Авторизация / Регистрация
+function sendAuthCommands() {
+  console.log(`[AUTH] Отправка команд авторизации для пароля ${PASSWORD}...`);
+  sendChatMessage(`/login ${PASSWORD}`);
+  setTimeout(() => sendChatMessage(`/register ${PASSWORD} ${PASSWORD}`), 1000);
+  setTimeout(() => sendChatMessage(`/reg ${PASSWORD} ${PASSWORD}`), 2000);
+}
+
 function updateCameraSmoothly() {
   let diff = targetYaw - currentYaw;
   while (diff < -180) diff += 360;
@@ -130,11 +149,11 @@ function updateInventoryStats(items) {
   let minDurability = 432;
 
   items.forEach(item => {
-    if (!item || !item.name) return;
-    const name = item.name.toLowerCase();
+    if (!item) return;
+    const name = (item.name || item.runtime_entity_id || '').toString().toLowerCase();
 
     if (name.includes('firework') || name.includes('rocket')) {
-      newRockets += (item.count || 1);
+      newRockets += (item.count || item.stack_size || 1);
     }
 
     if (name.includes('elytra')) {
@@ -147,13 +166,26 @@ function updateInventoryStats(items) {
     }
   });
 
-  rocketCount = newRockets;
-  hasElytra = newElytra;
-  elytraDurability = hasElytra ? minDurability : 0;
+  if (newRockets > 0) rocketCount = newRockets;
+  if (newElytra) {
+    hasElytra = true;
+    elytraDurability = minDurability;
+  }
 }
 
 client.on('inventory_content', (packet) => updateInventoryStats(packet.items));
+client.on('inventory_slot', (packet) => updateInventoryStats([packet.item]));
 client.on('container_set_content', (packet) => updateInventoryStats(packet.items));
+
+// Чтение чата для авто-пароля и авто-еды
+client.on('text', (packet) => {
+  const message = (packet.message || '').toLowerCase();
+
+  // Если сервер просит войти/зарегистрироваться
+  if (message.includes('login') || message.includes('register') || message.includes('пароль') || message.includes('авторизуйтесь')) {
+    sendAuthCommands();
+  }
+});
 
 client.on('player_attributes', (packet) => {
   if (packet.attributes && Array.isArray(packet.attributes)) {
@@ -162,21 +194,13 @@ client.on('player_attributes', (packet) => {
         const now = Date.now();
         if (now - lastFoodTime > 5000) {
           lastFoodTime = now;
-          client.write('text', {
-            type: 'chat',
-            needs_translation: false,
-            source_name: client.username,
-            xuid: '',
-            platform_chat_id: '',
-            message: '/food'
-          });
+          sendChatMessage('/food');
         }
       }
     });
   }
 });
 
-// Фильтр: Сундуки/Шалкеры И Спавнеры (от 5 шт в 1 чанке)
 client.on('block_actor_data', (packet) => {
   let blockId = '';
   if (packet.nbt && packet.nbt.value && packet.nbt.value.id) {
@@ -207,13 +231,18 @@ client.on('block_actor_data', (packet) => {
 });
 
 client.on('spawn', () => {
+  console.log(`[ONLINE] Вход на ${TARGET_SERVER.name}...`);
+  
+  // Отправляем пароль сразу при появлении
+  sendAuthCommands();
+
   if (isFlying) return;
   isFlying = true;
 
-  console.log(`[ONLINE] Успешный вход на ${TARGET_SERVER.name}!`);
-  tgBot.sendMessage(TG_CHAT_ID, `✅ Бот успешно зашел на **${TARGET_SERVER.name}**!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Нет'}\n🚀 Ракет: ${rocketCount} шт.\n📐 Старт полета по сетке.`);
-
-  setTimeout(startFlightLoop, 3000);
+  setTimeout(() => {
+    tgBot.sendMessage(TG_CHAT_ID, `✅ Бот зашел на **${TARGET_SERVER.name}** и авторизовался!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Обнаружена'}\n🚀 Ракет: ${rocketCount} шт.\n📐 Старт полета.`);
+    startFlightLoop();
+  }, 5000);
 });
 
 function startFlightLoop() {
@@ -222,7 +251,7 @@ function startFlightLoop() {
   let stepCount = 0;
 
   flyInterval = setInterval(() => {
-    if (rocketCount <= 0) {
+    if (rocketCount <= 0 && stepCount > 100) {
       tgBot.sendMessage(TG_CHAT_ID, `⚠️ **ПОЛЕТ ОСТАНОВЛЕН!** Закончились ракеты.\n🌐 ${TARGET_SERVER.name}\n📍 Координаты: X: ${Math.round(currentPos.x)}, Y: 120, Z: ${Math.round(currentPos.z)}`);
       clearInterval(flyInterval);
       return;
@@ -289,4 +318,3 @@ client.on('kick', (reason) => {
 client.on('error', (err) => {
   console.error('[ERROR]', err.message);
 });
-
