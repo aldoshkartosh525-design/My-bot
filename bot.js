@@ -1,15 +1,18 @@
 const http = require('http');
+const fs = require('fs');
 const bedrock = require('bedrock-protocol');
 const TelegramBot = require('node-telegram-bot-api');
 
+// HTTP-сервер для поддержания работы на хостинге (Render, Koyeb и т.д.)
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('Phoenix-PE Bot is active.');
+  res.end('Phoenix-PE Debug Bot is active.');
 }).listen(PORT, () => {
   console.log(`[HTTP] Сервер запущен на порту ${PORT}`);
 });
 
+// НАСТРОЙКИ
 const TG_TOKEN = process.env.TG_TOKEN || '8699310111:AAFrTIY5EMBc39t8B00ASKpHEjxJcW9iBpI';
 const TG_CHAT_ID = process.env.TG_CHAT_ID || '8070071877';
 const USERNAME = process.env.USERNAME || 'RiverSauce1216';
@@ -31,9 +34,9 @@ let isAuthenticated = false;
 let rocketCount = 0;
 let hasElytra = false;
 let elytraDurability = 432;
-let lastFoodTime = 0;
 let isFlying = false;
 
+// Сетка облета
 const routeGrid = [
   { start: { x: -2420, z: -2450 }, end: { x: -2420, z: 2450 } },
   { start: { x: -2260, z: 2450 }, end: { x: -2260, z: -2450 } },
@@ -71,11 +74,8 @@ const routeGrid = [
 
 let currentSegmentIndex = 0;
 let currentPos = { x: routeGrid[0].start.x, y: 120, z: routeGrid[0].start.z };
-let currentYaw = 0;
 let targetYaw = 0;
-let currentPitch = 0;
 
-const foundStorageBases = new Set();
 const spawnerCounts = new Map();
 const foundSpawnerBases = new Set();
 
@@ -99,7 +99,6 @@ function startAuthLoop() {
   if (authInterval) clearInterval(authInterval);
   isAuthenticated = false;
 
-  console.log('[AUTH] Запуск спама команд авторизации...');
   authInterval = setInterval(() => {
     if (isAuthenticated) {
       clearInterval(authInterval);
@@ -108,12 +107,11 @@ function startAuthLoop() {
     sendChatMessage(`/login ${PASSWORD}`);
     sendChatMessage(`/l ${PASSWORD}`);
     sendChatMessage(`/register ${PASSWORD} ${PASSWORD}`);
-  }, 2000);
+  }, 2500);
 }
 
 function connect() {
   console.log(`[CONNECTING] Подключение к ${TARGET_SERVER.name}...`);
-  
   if (flyInterval) clearInterval(flyInterval);
   if (authInterval) clearInterval(authInterval);
   isFlying = false;
@@ -144,16 +142,67 @@ function connect() {
     }
   });
 
-  // Отправка авторизации сразу при получении данных о мире
   client.on('start_game', () => {
-    console.log('[GAME] Пакет start_game получен. Начинаем авторизацию...');
+    console.log('[GAME START] Старт мира, включаем авто-пароль');
     startAuthLoop();
   });
 
+  // ==========================================
+  // ПЕРЕХВАТ И ДАМП ТАБЛИЧЕК / GUI В ФАЙЛ
+  // ==========================================
+  client.on('modal_form_request', (packet) => {
+    const formId = packet.form_id;
+    const rawData = packet.data;
+
+    console.log(`[FORM CAPTURED] Перехвачена форма ID: ${formId}`);
+
+    let parsedForm = null;
+    try {
+      parsedForm = JSON.parse(rawData);
+    } catch (e) {
+      parsedForm = { raw_string: rawData };
+    }
+
+    // Собираем дамп объект
+    const dumpData = {
+      server: TARGET_SERVER.name,
+      timestamp: new Date().toISOString(),
+      form_id: formId,
+      parsed_form: parsedForm,
+      raw_payload: rawData
+    };
+
+    const fileName = `DEBUG_FORM_${formId}.json`;
+    const jsonString = JSON.stringify(dumpData, null, 2);
+
+    // 1. Сохранение файла на диск
+    try {
+      fs.writeFileSync(fileName, jsonString);
+      console.log(`[FILE SAVED] Данные формы сохранены в ${fileName}`);
+    } catch (err) {
+      console.error('[FILE ERROR]', err.message);
+    }
+
+    // 2. Отправка файла в Telegram
+    tgBot.sendDocument(
+      TG_CHAT_ID,
+      Buffer.from(jsonString, 'utf-8'),
+      { caption: `📋 **ПЕРЕХВАЧЕНА ТАБЛИЧКА / ФОРМА (ID: ${formId})**\n🌐 Сервер: ${TARGET_SERVER.name}` },
+      { filename: fileName, contentType: 'application/json' }
+    ).catch(err => console.error('[TG SEND ERROR]', err.message));
+  });
+
+  // Чтение текста чата
   client.on('text', (packet) => {
     const msg = (packet.message || '').toLowerCase();
+
+    // Если чат запрашивает ввод пароля
+    if (msg.includes('/login') || msg.includes('/register') || msg.includes('пароль')) {
+      sendChatMessage(`/login ${PASSWORD}`);
+    }
+
     if (msg.includes('успешно') || msg.includes('logged in') || msg.includes('добро пожаловать')) {
-      console.log('[AUTH] Авторизация успешна!');
+      console.log('[AUTH SUCCESS] Авторизация подтверждена!');
       isAuthenticated = true;
       if (authInterval) clearInterval(authInterval);
     }
@@ -162,31 +211,21 @@ function connect() {
   client.on('inventory_content', (packet) => updateInventoryStats(packet.items));
   client.on('inventory_slot', (packet) => updateInventoryStats([packet.item]));
 
+  // Поиск баз: строго от 5 спавнеров в 1 чанке
   client.on('block_actor_data', (packet) => {
     let blockId = '';
     if (packet.nbt && packet.nbt.value && packet.nbt.value.id) {
       blockId = String(packet.nbt.value.id.value);
     }
 
-    const x = packet.x;
-    const y = packet.y;
-    const z = packet.z;
-    const chunkKey = `${Math.floor(x / 16)}_${Math.floor(z / 16)}`;
-
-    if (blockId === 'Chest' || blockId === 'TrappedChest' || blockId.includes('ShulkerBox')) {
-      if (!foundStorageBases.has(chunkKey)) {
-        foundStorageBases.add(chunkKey);
-        tgBot.sendMessage(TG_CHAT_ID, `🚨 **НАЙДЕН СКЛАД / ШАЛКЕР!**\n🌐 Сервер: ${TARGET_SERVER.name}\n📦 Блок: ${blockId}\n📍 X: ${x}, Y: ${y}, Z: ${z}\n🚀 Ракет: ${rocketCount} | 🛡️ Элитра: ${elytraDurability} HP`);
-      }
-    }
-
     if (blockId === 'MobSpawner' || blockId === 'Spawner') {
+      const chunkKey = `${Math.floor(packet.x / 16)}_${Math.floor(packet.z / 16)}`;
       const currentCount = (spawnerCounts.get(chunkKey) || 0) + 1;
       spawnerCounts.set(chunkKey, currentCount);
 
       if (currentCount >= 5 && !foundSpawnerBases.has(chunkKey)) {
         foundSpawnerBases.add(chunkKey);
-        tgBot.sendMessage(TG_CHAT_ID, `🔥 **НАЙДЕНА БАЗА (СПАВНЕРЫ)!**\n🌐 Сервер: ${TARGET_SERVER.name}\n💀 Спавнеров в чанке: ${currentCount} шт.\n📍 X: ${x}, Y: ${y}, Z: ${z}\n🚀 Ракет: ${rocketCount} | 🛡️ Элитра: ${elytraDurability} HP`);
+        tgBot.sendMessage(TG_CHAT_ID, `🔥 **НАЙДЕНА БАЗА (СПАВНЕРЫ)!**\n🌐 Сервер: ${TARGET_SERVER.name}\n💀 Спавнеров в 1 чанке: ${currentCount} шт.\n📍 X: ${packet.x}, Y: ${packet.y}, Z: ${packet.z}\n🚀 Ракет: ${rocketCount} | 🛡️ Элитра: ${elytraDurability} HP`);
       }
     }
   });
@@ -194,27 +233,21 @@ function connect() {
   client.on('spawn', () => {
     if (isFlying) return;
     isFlying = true;
-    console.log(`[ONLINE] Зашли на сервер ${TARGET_SERVER.name}`);
+    console.log(`[ONLINE] Зашли на ${TARGET_SERVER.name}`);
 
     setTimeout(() => {
-      tgBot.sendMessage(TG_CHAT_ID, `✅ Бот в сети на **${TARGET_SERVER.name}**!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Обнаружена'}\n🚀 Ракет: ${rocketCount} шт.\n📐 Запуск полета.`);
+      tgBot.sendMessage(TG_CHAT_ID, `✅ Бот на сервере **${TARGET_SERVER.name}**!\n🎒 Элитра: ${hasElytra ? elytraDurability + ' HP' : 'Обнаружена'}\n🚀 Ракет: ${rocketCount} шт.`);
       startFlightLoop();
     }, 4000);
   });
 
   client.on('kick', (reason) => {
-    console.log('[KICK] Бот был кикнут:', JSON.stringify(reason));
+    console.log('[KICK]', JSON.stringify(reason));
     reconnect();
   });
 
-  client.on('error', (err) => {
-    console.error('[ERROR]', err.message);
-  });
-
-  client.on('close', () => {
-    console.log('[DISCONNECT] Соединение закрыто.');
-    reconnect();
-  });
+  client.on('error', (err) => console.error('[ERROR]', err.message));
+  client.on('close', () => reconnect());
 }
 
 function reconnect() {
@@ -223,9 +256,7 @@ function reconnect() {
   isFlying = false;
 
   console.log('[RECONNECT] Переподключение через 10 секунд...');
-  setTimeout(() => {
-    connect();
-  }, 10000);
+  setTimeout(() => connect(), 10000);
 }
 
 function updateInventoryStats(items) {
@@ -294,7 +325,7 @@ function startFlightLoop() {
     }
 
     client.write('player_auth_input', {
-      pitch: currentPitch,
+      pitch: 0,
       yaw: targetYaw,
       position: { x: currentPos.x, y: 120, z: currentPos.z },
       move_vector: { x: 0, z: 1 },
@@ -307,5 +338,5 @@ function startFlightLoop() {
   }, 200);
 }
 
-// Первый запуск
 connect();
+
