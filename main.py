@@ -289,7 +289,7 @@ async def bind_handler(message: types.Message):
             print(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
     await send_backup_to_group()
-        @dp.callback_query(F.data.startswith("bind_"))
+@dp.callback_query(F.data.startswith("bind_"))
 async def process_bind_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("У вас нет прав администратора!", show_alert=True)
@@ -656,4 +656,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
 
