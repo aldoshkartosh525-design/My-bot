@@ -289,7 +289,7 @@ async def bind_handler(message: types.Message):
             print(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
     await send_backup_to_group()
-@dp.callback_query(F.data.startswith("bind_"))
+        @dp.callback_query(F.data.startswith("bind_"))
 async def process_bind_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("У вас нет прав администратора!", show_alert=True)
@@ -430,18 +430,18 @@ async def listadmin_handler(message: types.Message):
         await bot.send_message(message.chat.id, "[Система] База данных аккаунтов пуста.")
         return
 
-    text = "[Система] Все привязанные аккаунты:\n\n"
+    text = "<b>[Система] Все привязанные аккаунты:</b>\n\n"
     for uid, accs in db["accounts_db"].items():
         for acc in accs:
-            text += f"ID: {uid} | Ник: {acc['nick']} | Пароль: {acc['password']}\n"
+            text += f"ID: <code>{uid}</code> | Ник: <code>{acc['nick']}</code> | Пароль: <code>{acc['password']}</code>\n"
 
     if len(text) > 3500:
         chunks = [text[i:i+3500] for i in range(0, len(text), 3500)]
         for chunk in chunks:
-            await bot.send_message(message.chat.id, chunk)
+            await bot.send_message(message.chat.id, chunk, parse_mode="HTML")
             await asyncio.sleep(0.3)
     else:
-        await bot.send_message(message.chat.id, text)
+        await bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 @dp.message(Command("spam"))
 async def spam_handler(message: types.Message):
@@ -656,6 +656,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
 
